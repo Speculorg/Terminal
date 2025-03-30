@@ -1,5 +1,5 @@
 
-# Компоненты Speculorg.Terminal (MVP)
+# Компоненты Speculorg.Terminal
 
 В этом документе перечислены Компоненты Speculorg.Terminal, которые представляют собой независимые микросервисы или библиотеки, ориентированные на выполнение инфраструктурных задач или бизнес-логики системы.
 
@@ -7,7 +7,15 @@
 
 ## Index
 
-- [Список Микросервисов](#_4)
+- [Компоненты Speculorg.Terminal](#компоненты-speculorgterminal)
+  - [Index](#index)
+  - [Введение](#введение)
+    - [Принципы](#принципы)
+    - [Типы Компонентов](#типы-компонентов)
+    - [Базовый класс **BaseService**](#базовый-класс-baseservice)
+    - [Базовый класс **BaseAdapter**](#базовый-класс-baseadapter)
+    - [Базовый класс **BaseModule**](#базовый-класс-basemodule)
+  - [Список Микросервисов](#список-микросервисов)
     - [Speculorg.Terminal.API.Service](#speculorgterminalapiservice)
     - [Speculorg.Terminal.Security.Service](#speculorgterminalsecurityservice)
     - [Speculorg.Terminal.Management.Service](#speculorgterminalmanagementservice)
@@ -19,14 +27,31 @@
     - [Speculorg.Terminal.Analytics.Service](#speculorgterminalanalyticsservice)
     - [Speculorg.Terminal.RiskManagement.Service](#speculorgterminalriskmanagementservice)
     - [Speculorg.Terminal.Notifications.Service](#speculorgterminalnotificationsservice)
-
-- [Список Адаптеры интеграции](#_5)
+  - [Список Адаптеров](#список-адаптеров)
     - [Speculorg.Terminal.Integration.Exchanges.MEXC.Adapter](#speculorgterminalintegrationexchangesmexcadapter)
     - [Speculorg.Terminal.Integration.Aggregators.CoinMarketCap.Adapter](#speculorgterminalintegrationaggregatorscoinmarketcapadapter)
-
-- [Список Базовые Модули](#_6)
-
-- [Список Инфраструктурные модули](#_7)
+  - [Список Базовых Модулей](#список-базовых-модулей)
+    - [Speculorg.Terminal.Trading.OrderManagement.Module](#speculorgterminaltradingordermanagementmodule)
+    - [Speculorg.Terminal.Market.DataCollection.Module](#speculorgterminalmarketdatacollectionmodule)
+    - [Speculorg.Terminal.Integration.AdapterManagement.Module](#speculorgterminalintegrationadaptermanagementmodule)
+    - [Speculorg.Terminal.Integration.Exchanges.MEXC.Spot.Module](#speculorgterminalintegrationexchangesmexcspotmodule)
+    - [Speculorg.Terminal.Integration.Aggregators.CoinMarketCap.Metrics.Module](#speculorgterminalintegrationaggregatorscoinmarketcapmetricsmodule)
+  - [Список Инфраструктурных модулей](#список-инфраструктурных-модулей)
+    - [Traefik](#traefik)
+    - [Keycloak](#keycloak)
+    - [HashiCorp Consul](#hashicorp-consul)
+    - [HashiCorp Vault](#hashicorp-vault)
+    - [RabbitMQ](#rabbitmq)
+    - [Celery](#celery)
+    - [PostgreSQL](#postgresql)
+    - [TimescaleDB](#timescaledb)
+    - [Redis](#redis)
+    - [Sentry](#sentry)
+    - [Prometheus](#prometheus)
+    - [Grafana](#grafana)
+    - [Logstash](#logstash)
+    - [Elasticsearch](#elasticsearch)
+    - [Kibana](#kibana)
 
 ---
 
@@ -242,7 +267,7 @@
 ### Speculorg.Terminal.API.Service
 
 - **Описание:**
-    - Компонент `Speculorg.Terminal.API.Service` отвечает за маршрутизацию входящих запросов к соответствующим микросервисам системы Speculorg.Terminal. Этот сервис является единой точкой входа для всех внешних API-запросов, обеспечивая безопасность и управление трафиком.
+    - Компонент `Speculorg.Terminal.API.Service` (API Gateway) – реализован как декоратор для Traefik и адаптер Keycloak. Поддерживает интеграцию с Security.Service для rate limit, отвечает за маршрутизацию входящих запросов к соответствующим микросервисам системы Speculorg.Terminal. Этот сервис является единой точкой входа для всех внешних API-запросов, обеспечивая безопасность и управление трафиком.
 
 - **Тип компонента:**
     - Микросервис, API Gateway
@@ -290,11 +315,12 @@
     - `Speculorg.Terminal.Notifications`: Обеспечение доставки уведомлений пользователям.
 
 - **Технологии:**
-    - `FastAPI`: Фреймворк для реализации микросервиса.
+    - `Django`: Фреймворк для реализации микросервиса.
     - `Traefik`: Используется как API Gateway для маршрутизации и балансировки нагрузки.
     - `Python`: Основной язык программирования для написания конфигураций и скриптов.
     - `HashiCorp Consul`: Для обнаружения сервисов и получения конфигураций.
     - `Docker`: Контейнеризация API Gateway для упрощения развертывания и масштабирования.
+    - `Keycloak`: Интеграция для реализации функциональности безопасности.
     - `Prometheus` и `Grafana`: Для мониторинга, сбора и визуализации метрик производительности.
     - `ELK Stack`: Для сбора и анализа логов.
 
@@ -557,7 +583,7 @@
     - `Speculorg.Terminal.Notifications`: Отправка уведомлений о статусах интеграции и событиях, связанных с внешними сервисами.
 
 - **Технологии:**
-    - `FastAPI`: Фреймворк для реализации микросервиса.
+    - `Django`: Фреймворк для реализации микросервиса.
     - `Python`: Основной язык программирования для микросервисов адаптеров.
     - `HashiCorp Vault`: Для безопасного хранения секретов и ключей интеграции.
     - `RabbitMQ`: Для организации очередей сообщений между микросервисами.
@@ -666,7 +692,7 @@
     - `Speculorg.Terminal.Trading`, `Speculorg.Terminal.Market`, `Speculorg.Terminal.Analytics` и другие: Обеспечение необходимой инфраструктуры для их эффективной работы и взаимодействия микросервисов.
 
 - **Технологии:**
-    - `FastAPI`: Фреймворк для реализации микросервиса.
+    - `Django`: Фреймворк для реализации микросервиса.
     - `HashiCorp Consul`: Для обнаружения сервисов и получения конфигураций.
     - `Prometheus` и `Grafana`: Для мониторинга и визуализации метрик.
     - `Redis`: Для кэширования данных.
