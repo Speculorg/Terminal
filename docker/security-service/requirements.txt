@@ -1,0 +1,9 @@
+Django==5.1.8
+gunicorn==21.2.0
+psycopg2-binary==2.9.9
+redis==5.0.1
+python-consul==1.1.0
+python-keycloak==2.10.0
+opentelemetry-api==1.22.0
+opentelemetry-sdk==1.22.0
+opentelemetry-instrumentation-django==0.42b0 

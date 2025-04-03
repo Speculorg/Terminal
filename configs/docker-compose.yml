@@ -1,0 +1,435 @@
+version: "3.9"
+
+services:
+  # Инфраструктурные сервисы
+  infrastructure-service:
+    build:
+      context: ../docker/infrastructure-service
+    ports:
+      - "9000:9000"
+    volumes:
+      - ../configs/:/app/configs/
+      - ../modules/infrastructure-service/config/:/app/config/
+    env_file:
+      - .env.develop
+    networks:
+      - speculorg_network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    depends_on:
+      - infrastructure-consul-module
+      - infrastructure-vault-module
+      - infrastructure-database-module
+      - infrastructure-redis-module
+      - infrastructure-rabbitmq-module
+      - infrastructure-keycloak-module
+      - infrastructure-traefik-module
+      - infrastructure-opentelemetry-module
+      - infrastructure-prometheus-module
+      - infrastructure-grafana-module
+      - infrastructure-sentry-module
+      - infrastructure-elk-module
+
+  # Модули инфраструктуры
+  infrastructure-consul-module:
+    build:
+      context: ../docker/infrastructure-consul-module
+    ports:
+      - "9001:9000"
+    volumes:
+      - ../configs/:/app/configs/
+      - ../modules/infrastructure-consul-module/config/:/app/config/
+    env_file:
+      - .env.develop
+    networks:
+      - speculorg_network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  infrastructure-vault-module:
+    build:
+      context: ../docker/infrastructure-vault-module
+    ports:
+      - "9002:9000"
+    volumes:
+      - ../configs/:/app/configs/
+      - ../modules/infrastructure-vault-module/config/:/app/config/
+    env_file:
+      - .env.develop
+    networks:
+      - speculorg_network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  infrastructure-database-module:
+    build:
+      context: ../docker/infrastructure-database-module
+    ports:
+      - "9003:9000"
+    volumes:
+      - ../configs/:/app/configs/
+      - ../modules/infrastructure-database-module/config/:/app/config/
+      - postgres_data:/var/lib/postgresql/data
+    env_file:
+      - .env.develop
+    networks:
+      - speculorg_network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  infrastructure-redis-module:
+    build:
+      context: ../docker/infrastructure-redis-module
+    ports:
+      - "9004:9000"
+    volumes:
+      - ../configs/:/app/configs/
+      - ../modules/infrastructure-redis-module/config/:/app/config/
+      - redis_data:/data
+    env_file:
+      - .env.develop
+    networks:
+      - speculorg_network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  infrastructure-rabbitmq-module:
+    build:
+      context: ../docker/infrastructure-rabbitmq-module
+    ports:
+      - "9005:9000"
+    volumes:
+      - ../configs/:/app/configs/
+      - ../modules/infrastructure-rabbitmq-module/config/:/app/config/
+      - rabbitmq_data:/var/lib/rabbitmq
+    env_file:
+      - .env.develop
+    networks:
+      - speculorg_network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  infrastructure-keycloak-module:
+    build:
+      context: ../docker/infrastructure-keycloak-module
+    ports:
+      - "9006:9000"
+    volumes:
+      - ../configs/:/app/configs/
+      - ../modules/infrastructure-keycloak-module/config/:/app/config/
+    env_file:
+      - .env.develop
+    networks:
+      - speculorg_network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  infrastructure-traefik-module:
+    build:
+      context: ../docker/infrastructure-traefik-module
+    ports:
+      - "9007:9000"
+    volumes:
+      - ../configs/:/app/configs/
+      - ../modules/infrastructure-traefik-module/config/:/app/config/
+    env_file:
+      - .env.develop
+    networks:
+      - speculorg_network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  infrastructure-opentelemetry-module:
+    build:
+      context: ../docker/infrastructure-opentelemetry-module
+    ports:
+      - "9008:9000"
+    volumes:
+      - ../configs/:/app/configs/
+      - ../modules/infrastructure-opentelemetry-module/config/:/app/config/
+    env_file:
+      - .env.develop
+    networks:
+      - speculorg_network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  infrastructure-prometheus-module:
+    build:
+      context: ../docker/infrastructure-prometheus-module
+    ports:
+      - "9009:9000"
+    volumes:
+      - ../configs/:/app/configs/
+      - ../modules/infrastructure-prometheus-module/config/:/app/config/
+    env_file:
+      - .env.develop
+    networks:
+      - speculorg_network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  infrastructure-grafana-module:
+    build:
+      context: ../docker/infrastructure-grafana-module
+    ports:
+      - "9010:9000"
+    volumes:
+      - ../configs/:/app/configs/
+      - ../modules/infrastructure-grafana-module/config/:/app/config/
+    env_file:
+      - .env.develop
+    networks:
+      - speculorg_network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  infrastructure-sentry-module:
+    build:
+      context: ../docker/infrastructure-sentry-module
+    ports:
+      - "9011:9000"
+    volumes:
+      - ../configs/:/app/configs/
+      - ../modules/infrastructure-sentry-module/config/:/app/config/
+    env_file:
+      - .env.develop
+    networks:
+      - speculorg_network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  infrastructure-elk-module:
+    build:
+      context: ../docker/infrastructure-elk-module
+    ports:
+      - "9012:9000"
+    volumes:
+      - ../configs/:/app/configs/
+      - ../modules/infrastructure-elk-module/config/:/app/config/
+      - elk_data:/var/lib/elasticsearch
+    env_file:
+      - .env.develop
+    networks:
+      - speculorg_network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Сервис управления
+  management-service:
+    build:
+      context: ../docker/management-service
+    ports:
+      - "9013:9000"
+    volumes:
+      - ../configs/:/app/configs/
+      - ../modules/management-service/config/:/app/config/
+    env_file:
+      - .env.develop
+    networks:
+      - speculorg_network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    depends_on:
+      - infrastructure-service
+      - management-logs-module
+      - management-configurations-module
+      - management-users-module
+
+  # Модули управления
+  management-logs-module:
+    build:
+      context: ../docker/management-logs-module
+    ports:
+      - "9014:9000"
+    volumes:
+      - ../configs/:/app/configs/
+      - ../modules/management-logs-module/config/:/app/config/
+    env_file:
+      - .env.develop
+    networks:
+      - speculorg_network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    depends_on:
+      - infrastructure-elk-module
+
+  management-configurations-module:
+    build:
+      context: ../docker/management-configurations-module
+    ports:
+      - "9015:9000"
+    volumes:
+      - ../configs/:/app/configs/
+      - ../modules/management-configurations-module/config/:/app/config/
+    env_file:
+      - .env.develop
+    networks:
+      - speculorg_network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    depends_on:
+      - infrastructure-consul-module
+
+  management-users-module:
+    build:
+      context: ../docker/management-users-module
+    ports:
+      - "9016:9000"
+    volumes:
+      - ../configs/:/app/configs/
+      - ../modules/management-users-module/config/:/app/config/
+    env_file:
+      - .env.develop
+    networks:
+      - speculorg_network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    depends_on:
+      - infrastructure-database-module
+
+  # Сервис безопасности
+  security-service:
+    build:
+      context: ../docker/security-service
+    ports:
+      - "9017:9000"
+    volumes:
+      - ../configs/:/app/configs/
+      - ../modules/security-service/config/:/app/config/
+    env_file:
+      - .env.develop
+    networks:
+      - speculorg_network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    depends_on:
+      - infrastructure-service
+      - security-audit-module
+      - security-authentication-module
+      - security-authorization-module
+
+  # Модули безопасности
+  security-audit-module:
+    build:
+      context: ../docker/security-audit-module
+    ports:
+      - "9018:9000"
+    volumes:
+      - ../configs/:/app/configs/
+      - ../modules/security-audit-module/config/:/app/config/
+    env_file:
+      - .env.develop
+    networks:
+      - speculorg_network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    depends_on:
+      - infrastructure-elk-module
+
+  security-authentication-module:
+    build:
+      context: ../docker/security-authentication-module
+    ports:
+      - "9019:9000"
+    volumes:
+      - ../configs/:/app/configs/
+      - ../modules/security-authentication-module/config/:/app/config/
+    env_file:
+      - .env.develop
+    networks:
+      - speculorg_network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    depends_on:
+      - infrastructure-keycloak-module
+
+  security-authorization-module:
+    build:
+      context: ../docker/security-authorization-module
+    ports:
+      - "9020:9000"
+    volumes:
+      - ../configs/:/app/configs/
+      - ../modules/security-authorization-module/config/:/app/config/
+    env_file:
+      - .env.develop
+    networks:
+      - speculorg_network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    depends_on:
+      - infrastructure-keycloak-module
+
+networks:
+  speculorg_network:
+    driver: bridge
+
+volumes:
+  postgres_data:
+  redis_data:
+  rabbitmq_data:
+  elk_data:
