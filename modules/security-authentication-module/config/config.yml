@@ -1,0 +1,7 @@
+ # Authentication Module Configuration
+ 
+ # Module Information
+module:
+  name: security-authentication-module
+  version: 0.0.1
+  description: Authentication module for user authentication and authorization

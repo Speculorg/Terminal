@@ -1,0 +1,7 @@
+# OpenTelemetry Module Configuration
+
+# Module Information
+module:
+  name: infrastructure-opentelemetry-module
+  version: 0.0.1
+  description: OpenTelemetry infrastructure module for observability and monitoring

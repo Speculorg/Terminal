@@ -1,0 +1,7 @@
+# Audit Module Configuration
+
+# Module Information
+module:
+  name: security-audit-module
+  version: 0.0.1
+  description: Audit module for security monitoring and auditing

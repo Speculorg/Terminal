@@ -1,0 +1,7 @@
+# Redis Module Configuration
+
+# Module Information
+module:
+  name: infrastructure-redis-module
+  version: 0.0.1
+  description: Redis infrastructure module for caching and data storage

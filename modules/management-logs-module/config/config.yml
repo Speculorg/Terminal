@@ -1,0 +1,7 @@
+# Logs Module Configuration
+
+# Module Information
+module:
+  name: management-logs-module
+  version: 0.0.1
+  description: Logs management module for logging and monitoring

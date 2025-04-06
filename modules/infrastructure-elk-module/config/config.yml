@@ -1,0 +1,7 @@
+# ELK Module Configuration
+
+# Module Information
+module:
+  name: infrastructure-elk-module
+  version: 0.0.1
+  description: ELK infrastructure module for logging and monitoring

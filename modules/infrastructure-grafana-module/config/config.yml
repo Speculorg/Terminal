@@ -1,0 +1,7 @@
+# Grafana Module Configuration
+
+# Module Information
+module:
+  name: infrastructure-grafana-module
+  version: 0.0.1
+  description: Grafana infrastructure module for monitoring and visualization

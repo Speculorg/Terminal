@@ -1,0 +1,7 @@
+# Authorization Module Configuration
+
+# Module Information
+module:
+  name: security-authorization-module
+  version: 0.0.1
+  description: Authorization module for user authorization and access control

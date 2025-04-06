@@ -1,0 +1,7 @@
+# Prometheus Module Configuration
+
+# Module Information
+module:
+  name: infrastructure-prometheus-module
+  version: 0.0.1
+  description: Prometheus infrastructure module for monitoring and alerting

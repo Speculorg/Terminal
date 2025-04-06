@@ -1,0 +1,7 @@
+# Docker Module Configuration
+
+# Module Information
+module:
+  name: infrastructure-docker-module
+  version: 0.0.1
+  description: Docker infrastructure module for containerization and orchestration
