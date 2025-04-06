@@ -1,0 +1,9 @@
+# Management Service Configuration
+
+# Service Information
+service:
+  name: management-service
+  version: 0.0.1
+  description: Management service for Terminal project
+  host: 0.0.0.0
+  port: 9002

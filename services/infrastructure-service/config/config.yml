@@ -1,0 +1,9 @@
+# Infrastructure Service Configuration
+
+# Service Information
+service:
+  name: infrastructure-service
+  version: 0.0.1
+  description: Core infrastructure service for Terminal project
+  host: 0.0.0.0
+  port: 9000
