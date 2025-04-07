@@ -8,14 +8,16 @@ setlocal enabledelayedexpansion
 ::              displays the file and directory tree structure with proper tree symbols,
 ::              and logs the output along with detailed debug information.
 ::
-:: Version: 0.1
+:: Version: 0.2
 :: Author: Speculorg Team
 :: Date: 2025.04.06
 ::
 :: History:
-::   0.0 - Initial implementation.
-::   0.1 - Added debug logging function, detailed timestamps, improved prefix formation,
-::         unified command-line processing, and enhanced directory existence check.
+::   0.1 - Initial implementation with debug logging, detailed timestamps,
+::         improved prefix formation, unified command-line processing,
+::         and enhanced directory existence check.
+::   0.2 - Added runtime environment information block before directory traversal,
+::         and simplified finish block to remove duplicate output.
 :: ====================================================
 
 :: ====================================================
@@ -119,6 +121,31 @@ if not exist "%WORKSPACE_ROOT%" (
 :: Get the name of the workspace root folder
 for %%I in ("%WORKSPACE_ROOT%") do set "ROOT_NAME=%%~nxI"
 call :log_debug "Processing root directory: %WORKSPACE_ROOT%"
+
+:: ====================================================
+:: Runtime Environment Information
+:: ====================================================
+for /f "delims=" %%v in ('ver') do set "OS_VERSION=%%v"
+(
+    echo.
+    echo Runtime Environment Information:
+    echo - Workspace Root: %WORKSPACE_ROOT%
+    echo - OS Version: %OS_VERSION%
+    echo - Maximum Recursion Depth: %MAX_DEPTH%
+    echo - Debug Mode: %DEBUG_MODE%
+    echo.
+) >> "%LOG_FILE%"
+
+if "%SHOW_PROGRESS%"=="true" (
+    echo.
+    echo Runtime Environment Information:
+    echo - Workspace Root: %WORKSPACE_ROOT%
+    echo - OS Version: %OS_VERSION%
+    echo - Maximum Recursion Depth: %MAX_DEPTH%
+    echo - Debug Mode: %DEBUG_MODE%
+    echo.
+)
+
 echo %DIR_SYMBOL% %ROOT_NAME%/ >> "%LOG_FILE%"
 if "%SHOW_PROGRESS%"=="true" echo %DIR_SYMBOL% %ROOT_NAME%/
 
@@ -135,12 +162,8 @@ goto :finish
 :log_debug
 if /i "%DEBUG_MODE%"=="true" (
     set "debug_time=%date% %time%"
-    echo:
-    echo ---------------------------------------------
     echo [DEBUG] [%debug_time%] %~1 >> "%LOG_FILE%"
     if "%SHOW_PROGRESS%"=="true" echo [DEBUG] [%debug_time%] %~1
-    echo ---------------------------------------------
-    echo:
 )
 exit /b
 
@@ -251,21 +274,24 @@ exit /b 1
 :: Finish
 :: ====================================================
 :finish
+:: Create a temporary file with the finish message
 (
-    echo:
+    echo.
     echo ---------------------------------------------
     echo Processing completed.
     echo ---------------------------------------------
     echo Results saved in: %LOG_FILE%
-    echo ---------------------------------------------
-) >> "%LOG_FILE%"
-if "%SHOW_PROGRESS%"=="true" (
-    echo:
-    echo ---------------------------------------------
-    echo Processing completed.
-    echo ---------------------------------------------
-    echo Results saved in: %LOG_FILE%
-    echo ---------------------------------------------
-)
+    echo.
+) > "%TEMP%\finish_message.txt"
+
+:: Append the finish message to the log file
+type "%TEMP%\finish_message.txt" >> "%LOG_FILE%"
+
+:: If progress output is enabled, display the finish message on the console
+if "%SHOW_PROGRESS%"=="true" type "%TEMP%\finish_message.txt"
+
+:: Clean up temporary file
+del "%TEMP%\finish_message.txt"
+
 endlocal
 exit /b
