@@ -77,7 +77,7 @@ def init_log_file(workspace_root):
     logs_dir = os.path.join(workspace_root, "logs")
     if not os.path.exists(logs_dir):
         os.makedirs(logs_dir)
-    log_filename = os.path.join(logs_dir, f"{timestamp}_check_project_files_result.log")
+    log_filename = os.path.join(logs_dir, f"{timestamp}_check_1_project_files_result.log")
     with open(log_filename, "w", encoding="utf-8") as log_file:
         log_file.write("Speculorg - Project Structure Report\n")
         log_file.write(f"Date: {timestamp}\n")

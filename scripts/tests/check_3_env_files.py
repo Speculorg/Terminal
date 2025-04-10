@@ -240,7 +240,7 @@ def init_log_file(workspace_root):
     logs_dir = os.path.join(workspace_root, "logs")
     if not os.path.exists(logs_dir):
         os.makedirs(logs_dir)
-    log_filename = os.path.join(logs_dir, f"{timestamp}_check_env_files.log")
+    log_filename = os.path.join(logs_dir, f"{timestamp}_check_3_env_files.log")
     with open(log_filename, "w", encoding="utf-8") as lf:
         lf.write("====================================================\n")
         lf.write("Speculorg - Environment Variable Check Report\n")

@@ -138,7 +138,7 @@ def init_log_file(workspace_root, log_dir_override=None):
     log_dir = log_dir_override if log_dir_override else os.path.join(workspace_root, "logs")
     if not os.path.exists(log_dir):
         os.makedirs(log_dir)
-    log_filename = os.path.join(log_dir, f"{timestamp}_check_infrastructure_files.log")
+    log_filename = os.path.join(log_dir, f"{timestamp}_check_2_infrastructure_files.log")
     with open(log_filename, "w", encoding="utf-8") as lf:
         lf.write("====================================================\n")
         lf.write("Speculorg - Infrastructure Check Report\n")
