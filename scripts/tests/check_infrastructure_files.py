@@ -40,6 +40,11 @@ History:
     0.1 - Initial version based on batch script.
     0.2 - Added runtime environment info and detailed finish block (in batch).
     0.3 - Ported to Python with modular, readable, and tree-based formatted output.
+
+Visit for more information:
+- https://specul.org/ - overview
+- https://docs.specul.org/ - documentation
+
 """
 
 import os
