@@ -9,9 +9,8 @@ COPY ../../modules/infrastructure-celery-module/ .
 
 ENV PYTHONUNBUFFERED=1
 
-HEALTHCHECK --interval=30s --timeout=10s --retries=3 \
-    CMD curl -f http://localhost:9000/health || exit 1
+HEALTHCHECK --interval=30s --timeout=10s --retries=3 CMD curl -f http://localhost:9000/health || exit 1
 
 EXPOSE 9000
 
-CMD ["gunicorn", "infrastructure_celery_module.wsgi:application", "--bind", "0.0.0.0:9000"] 
+ENTRYPOINT ["python", "main.py"]

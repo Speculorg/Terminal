@@ -9,9 +9,8 @@ COPY ../../services/management-service/ .
 
 ENV PYTHONUNBUFFERED=1
 
-HEALTHCHECK --interval=30s --timeout=10s --retries=3 \
-    CMD curl -f http://localhost:9000/health || exit 1
+HEALTHCHECK --interval=30s --timeout=10s --retries=3 CMD ["curl", "-f", "http://localhost:9000/health"]
 
 EXPOSE 9000
 
-CMD ["gunicorn", "management_service.wsgi:application", "--bind", "0.0.0.0:9000"] 
+ENTRYPOINT ["python", "main.py"]
