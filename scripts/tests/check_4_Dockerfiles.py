@@ -365,8 +365,8 @@ def validate_copy_paths(dockerfile_path, component, log_file, debug_mode, consol
     """
     Validates that COPY instructions in the Dockerfile contain the expected path
     based on the component type:
-      - For microservices (if component in SERVICES): expected to include "../../services/"
-      - For modules (if component in MODULES): expected to include "../../modules/"
+      - For microservices (if component in SERVICES): expected to include "./services/"
+      - For modules (if component in MODULES): expected to include "./modules/"
       
     Ignores COPY instructions that copy requirements.txt to avoid false positives.
     
@@ -384,9 +384,9 @@ def validate_copy_paths(dockerfile_path, component, log_file, debug_mode, consol
     
     expected_substring = ""
     if component in SERVICES:
-        expected_substring = "../../services/"
+        expected_substring = "./services/"
     elif component in MODULES:
-        expected_substring = "../../modules/"
+        expected_substring = "./modules/"
     
     warnings = []
     

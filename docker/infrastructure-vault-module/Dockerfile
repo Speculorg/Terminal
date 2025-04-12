@@ -6,7 +6,7 @@ COPY requirements.txt .
 
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY ../../modules/infrastructure-vault-module/ .
+COPY ./modules/infrastructure-vault-module/ .
 
 ENV PYTHONUNBUFFERED=1
 

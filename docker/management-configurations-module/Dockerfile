@@ -6,7 +6,7 @@ COPY requirements.txt .
 
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY ../../modules/management-configurations-module/ .
+COPY ./modules/management-configurations-module/ .
 
 ENV PYTHONUNBUFFERED=1
 

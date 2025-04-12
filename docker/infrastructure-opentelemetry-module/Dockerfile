@@ -6,7 +6,7 @@ COPY requirements.txt .
 
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY ../../modules/infrastructure-opentelemetry-module/ .
+COPY ./modules/infrastructure-opentelemetry-module/ .
 
 ENV PYTHONUNBUFFERED=1
 

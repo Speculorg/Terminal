@@ -6,7 +6,7 @@ COPY requirements.txt .
 
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY ../../modules/infrastructure-consul-module/ .
+COPY ./modules/infrastructure-consul-module/ .
 
 ENV PYTHONUNBUFFERED=1
 

@@ -6,7 +6,7 @@ COPY requirements.txt .
 
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY ../../modules/infrastructure-docker-module/ .
+COPY ./modules/infrastructure-docker-module/ .
 
 ENV PYTHONUNBUFFERED=1
 

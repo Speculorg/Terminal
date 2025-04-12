@@ -6,7 +6,7 @@ COPY requirements.txt .
 
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY ../../modules/infrastructure-database-module/ .
+COPY ./modules/infrastructure-database-module/ .
 
 ENV PYTHONUNBUFFERED=1
 

@@ -6,7 +6,7 @@ COPY requirements.txt .
 
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY ../../modules/management-users-module/ .
+COPY ./modules/management-users-module/ .
 
 ENV PYTHONUNBUFFERED=1
 
