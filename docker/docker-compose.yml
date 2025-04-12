@@ -1,19 +1,42 @@
-version: "3.9"
+# Speculorg.Terminal Docker Compose Configuration
+# This file defines the container orchestration for the Speculorg microservices architecture
+# Last updated: 2025.04.13
 
 services:
-  # Инфраструктурные сервисы
+  #############################################
+  # INFRASTRUCTURE SECTION
+  #############################################
+
+  # Infrastructure primary service
   infrastructure-service:
+    container_name: infrastructure-service
+    hostname: infrastructure-service.speculorg.local
     build:
-      context: ../docker/infrastructure-service
+      context: .
+      dockerfile: ./infrastructure-service/Dockerfile
     ports:
       - "9000:9000"
     volumes:
       - ../configs/:/app/configs/
-      - ../modules/infrastructure-service/config/:/app/config/
+      - ../services/infrastructure-service/:/app/
     env_file:
-      - .env.develop
+      - ../configs/.env.develop
+    environment:
+      - PYTHONUNBUFFERED=1
+      - SERVICE_NAME=infrastructure-service
+      - SERVICE_HOST=0.0.0.0
+      - SERVICE_PORT=9000
     networks:
-      - speculorg_network
+      speculorg_network:
+        ipv4_address: 172.20.1.1
+        aliases:
+          - infrastructure-service
+          - infrastructure-service.speculorg.local
+      external_network:
+        ipv4_address: 172.21.1.1
+        aliases:
+          - infrastructure-service
+    restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:9000/health"]
       interval: 30s
@@ -32,243 +55,494 @@ services:
       - infrastructure-grafana-module
       - infrastructure-sentry-module
       - infrastructure-elk-module
+      - infrastructure-docker-module
+      - infrastructure-celery-module
 
-  # Модули инфраструктуры
+  # Infrastructure modules
   infrastructure-consul-module:
+    container_name: infrastructure-consul-module
+    hostname: infrastructure-consul-module.speculorg.local
     build:
-      context: ../docker/infrastructure-consul-module
+      context: .
+      dockerfile: ./infrastructure-consul-module/Dockerfile
     ports:
-      - "9001:9000"
+      - "9101:9101"
     volumes:
       - ../configs/:/app/configs/
-      - ../modules/infrastructure-consul-module/config/:/app/config/
+      - ../modules/infrastructure-consul-module/:/app/
     env_file:
-      - .env.develop
+      - ../configs/.env.develop
+    environment:
+      - PYTHONUNBUFFERED=1
+      - SERVICE_NAME=infrastructure-consul-module
+      - SERVICE_HOST=0.0.0.0
+      - SERVICE_PORT=9101
     networks:
-      - speculorg_network
+      speculorg_network:
+        ipv4_address: 172.20.1.101
+        aliases:
+          - infrastructure-consul-module
+          - infrastructure-consul-module.speculorg.local
+    restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:9000/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:9101/health"]
       interval: 30s
       timeout: 10s
       retries: 3
 
   infrastructure-vault-module:
+    container_name: infrastructure-vault-module
+    hostname: infrastructure-vault-module.speculorg.local
     build:
-      context: ../docker/infrastructure-vault-module
+      context: .
+      dockerfile: ./infrastructure-vault-module/Dockerfile
     ports:
-      - "9002:9000"
+      - "9113:9113"
     volumes:
       - ../configs/:/app/configs/
-      - ../modules/infrastructure-vault-module/config/:/app/config/
+      - ../modules/infrastructure-vault-module/:/app/
     env_file:
-      - .env.develop
+      - ../configs/.env.develop
+    environment:
+      - PYTHONUNBUFFERED=1
+      - SERVICE_NAME=infrastructure-vault-module
+      - SERVICE_HOST=0.0.0.0
+      - SERVICE_PORT=9113
     networks:
-      - speculorg_network
+      speculorg_network:
+        ipv4_address: 172.20.1.102
+        aliases:
+          - infrastructure-vault-module
+          - infrastructure-vault-module.speculorg.local
+    restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:9000/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:9113/health"]
       interval: 30s
       timeout: 10s
       retries: 3
 
   infrastructure-database-module:
+    container_name: infrastructure-database-module
+    hostname: infrastructure-database-module.speculorg.local
     build:
-      context: ../docker/infrastructure-database-module
+      context: .
+      dockerfile: ./infrastructure-database-module/Dockerfile
     ports:
-      - "9003:9000"
+      - "9102:9102"
     volumes:
       - ../configs/:/app/configs/
-      - ../modules/infrastructure-database-module/config/:/app/config/
+      - ../modules/infrastructure-database-module/:/app/
       - postgres_data:/var/lib/postgresql/data
     env_file:
-      - .env.develop
+      - ../configs/.env.develop
+    environment:
+      - PYTHONUNBUFFERED=1
+      - SERVICE_NAME=infrastructure-database-module
+      - SERVICE_HOST=0.0.0.0
+      - SERVICE_PORT=9102
     networks:
-      - speculorg_network
+      speculorg_network:
+        ipv4_address: 172.20.1.103
+        aliases:
+          - infrastructure-database-module
+          - infrastructure-database-module.speculorg.local
+    restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:9000/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:9102/health"]
       interval: 30s
       timeout: 10s
       retries: 3
 
   infrastructure-redis-module:
+    container_name: infrastructure-redis-module
+    hostname: infrastructure-redis-module.speculorg.local
     build:
-      context: ../docker/infrastructure-redis-module
+      context: .
+      dockerfile: ./infrastructure-redis-module/Dockerfile
     ports:
-      - "9004:9000"
+      - "9110:9110"
     volumes:
       - ../configs/:/app/configs/
-      - ../modules/infrastructure-redis-module/config/:/app/config/
+      - ../modules/infrastructure-redis-module/:/app/
       - redis_data:/data
     env_file:
-      - .env.develop
+      - ../configs/.env.develop
+    environment:
+      - PYTHONUNBUFFERED=1
+      - SERVICE_NAME=infrastructure-redis-module
+      - SERVICE_HOST=0.0.0.0
+      - SERVICE_PORT=9110
     networks:
-      - speculorg_network
+      speculorg_network:
+        ipv4_address: 172.20.1.104
+        aliases:
+          - infrastructure-redis-module
+          - infrastructure-redis-module.speculorg.local
+    restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:9000/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:9110/health"]
       interval: 30s
       timeout: 10s
       retries: 3
 
   infrastructure-rabbitmq-module:
+    container_name: infrastructure-rabbitmq-module
+    hostname: infrastructure-rabbitmq-module.speculorg.local
     build:
-      context: ../docker/infrastructure-rabbitmq-module
+      context: .
+      dockerfile: ./infrastructure-rabbitmq-module/Dockerfile
     ports:
-      - "9005:9000"
+      - "9109:9109"
     volumes:
       - ../configs/:/app/configs/
-      - ../modules/infrastructure-rabbitmq-module/config/:/app/config/
+      - ../modules/infrastructure-rabbitmq-module/:/app/
       - rabbitmq_data:/var/lib/rabbitmq
     env_file:
-      - .env.develop
+      - ../configs/.env.develop
+    environment:
+      - PYTHONUNBUFFERED=1
+      - SERVICE_NAME=infrastructure-rabbitmq-module
+      - SERVICE_HOST=0.0.0.0
+      - SERVICE_PORT=9109
     networks:
-      - speculorg_network
+      speculorg_network:
+        ipv4_address: 172.20.1.105
+        aliases:
+          - infrastructure-rabbitmq-module
+          - infrastructure-rabbitmq-module.speculorg.local
+    restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:9000/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:9109/health"]
       interval: 30s
       timeout: 10s
       retries: 3
 
   infrastructure-keycloak-module:
+    container_name: infrastructure-keycloak-module
+    hostname: infrastructure-keycloak-module.speculorg.local
     build:
-      context: ../docker/infrastructure-keycloak-module
+      context: .
+      dockerfile: ./infrastructure-keycloak-module/Dockerfile
     ports:
-      - "9006:9000"
+      - "9106:9106"
     volumes:
       - ../configs/:/app/configs/
-      - ../modules/infrastructure-keycloak-module/config/:/app/config/
+      - ../modules/infrastructure-keycloak-module/:/app/
     env_file:
-      - .env.develop
+      - ../configs/.env.develop
+    environment:
+      - PYTHONUNBUFFERED=1
+      - SERVICE_NAME=infrastructure-keycloak-module
+      - SERVICE_HOST=0.0.0.0
+      - SERVICE_PORT=9106
     networks:
-      - speculorg_network
+      speculorg_network:
+        ipv4_address: 172.20.1.106
+        aliases:
+          - infrastructure-keycloak-module
+          - infrastructure-keycloak-module.speculorg.local
+    restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:9000/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:9106/health"]
       interval: 30s
       timeout: 10s
       retries: 3
 
   infrastructure-traefik-module:
+    container_name: infrastructure-traefik-module
+    hostname: infrastructure-traefik-module.speculorg.local
     build:
-      context: ../docker/infrastructure-traefik-module
+      context: .
+      dockerfile: ./infrastructure-traefik-module/Dockerfile
     ports:
-      - "9007:9000"
+      - "9112:9112"
+      - "80:80"
+      - "443:443"
     volumes:
       - ../configs/:/app/configs/
-      - ../modules/infrastructure-traefik-module/config/:/app/config/
+      - ../modules/infrastructure-traefik-module/:/app/
     env_file:
-      - .env.develop
+      - ../configs/.env.develop
+    environment:
+      - PYTHONUNBUFFERED=1
+      - SERVICE_NAME=infrastructure-traefik-module
+      - SERVICE_HOST=0.0.0.0
+      - SERVICE_PORT=9112
     networks:
-      - speculorg_network
+      speculorg_network:
+        ipv4_address: 172.20.1.107
+        aliases:
+          - infrastructure-traefik-module
+          - infrastructure-traefik-module.speculorg.local
+      external_network:
+        ipv4_address: 172.21.1.107
+        aliases:
+          - infrastructure-traefik-module
+    restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:9000/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:9112/health"]
       interval: 30s
       timeout: 10s
       retries: 3
 
   infrastructure-opentelemetry-module:
+    container_name: infrastructure-opentelemetry-module
+    hostname: infrastructure-opentelemetry-module.speculorg.local
     build:
-      context: ../docker/infrastructure-opentelemetry-module
+      context: .
+      dockerfile: ./infrastructure-opentelemetry-module/Dockerfile
     ports:
-      - "9008:9000"
+      - "9107:9107"
     volumes:
       - ../configs/:/app/configs/
-      - ../modules/infrastructure-opentelemetry-module/config/:/app/config/
+      - ../modules/infrastructure-opentelemetry-module/:/app/
     env_file:
-      - .env.develop
+      - ../configs/.env.develop
+    environment:
+      - PYTHONUNBUFFERED=1
+      - SERVICE_NAME=infrastructure-opentelemetry-module
+      - SERVICE_HOST=0.0.0.0
+      - SERVICE_PORT=9107
     networks:
-      - speculorg_network
+      speculorg_network:
+        ipv4_address: 172.20.1.108
+        aliases:
+          - infrastructure-opentelemetry-module
+          - infrastructure-opentelemetry-module.speculorg.local
+    restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:9000/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:9107/health"]
       interval: 30s
       timeout: 10s
       retries: 3
 
   infrastructure-prometheus-module:
+    container_name: infrastructure-prometheus-module
+    hostname: infrastructure-prometheus-module.speculorg.local
     build:
-      context: ../docker/infrastructure-prometheus-module
+      context: .
+      dockerfile: ./infrastructure-prometheus-module/Dockerfile
     ports:
-      - "9009:9000"
+      - "9108:9108"
     volumes:
       - ../configs/:/app/configs/
-      - ../modules/infrastructure-prometheus-module/config/:/app/config/
+      - ../modules/infrastructure-prometheus-module/:/app/
     env_file:
-      - .env.develop
+      - ../configs/.env.develop
+    environment:
+      - PYTHONUNBUFFERED=1
+      - SERVICE_NAME=infrastructure-prometheus-module
+      - SERVICE_HOST=0.0.0.0
+      - SERVICE_PORT=9108
     networks:
-      - speculorg_network
+      speculorg_network:
+        ipv4_address: 172.20.1.109
+        aliases:
+          - infrastructure-prometheus-module
+          - infrastructure-prometheus-module.speculorg.local
+    restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:9000/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:9108/health"]
       interval: 30s
       timeout: 10s
       retries: 3
 
   infrastructure-grafana-module:
+    container_name: infrastructure-grafana-module
+    hostname: infrastructure-grafana-module.speculorg.local
     build:
-      context: ../docker/infrastructure-grafana-module
+      context: .
+      dockerfile: ./infrastructure-grafana-module/Dockerfile
     ports:
-      - "9010:9000"
+      - "9105:9105"
     volumes:
       - ../configs/:/app/configs/
-      - ../modules/infrastructure-grafana-module/config/:/app/config/
+      - ../modules/infrastructure-grafana-module/:/app/
     env_file:
-      - .env.develop
+      - ../configs/.env.develop
+    environment:
+      - PYTHONUNBUFFERED=1
+      - SERVICE_NAME=infrastructure-grafana-module
+      - SERVICE_HOST=0.0.0.0
+      - SERVICE_PORT=9105
     networks:
-      - speculorg_network
+      speculorg_network:
+        ipv4_address: 172.20.1.110
+        aliases:
+          - infrastructure-grafana-module
+          - infrastructure-grafana-module.speculorg.local
+    restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:9000/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:9105/health"]
       interval: 30s
       timeout: 10s
       retries: 3
 
   infrastructure-sentry-module:
+    container_name: infrastructure-sentry-module
+    hostname: infrastructure-sentry-module.speculorg.local
     build:
-      context: ../docker/infrastructure-sentry-module
+      context: .
+      dockerfile: ./infrastructure-sentry-module/Dockerfile
     ports:
-      - "9011:9000"
+      - "9111:9111"
     volumes:
       - ../configs/:/app/configs/
-      - ../modules/infrastructure-sentry-module/config/:/app/config/
+      - ../modules/infrastructure-sentry-module/:/app/
     env_file:
-      - .env.develop
+      - ../configs/.env.develop
+    environment:
+      - PYTHONUNBUFFERED=1
+      - SERVICE_NAME=infrastructure-sentry-module
+      - SERVICE_HOST=0.0.0.0
+      - SERVICE_PORT=9111
     networks:
-      - speculorg_network
+      speculorg_network:
+        ipv4_address: 172.20.1.111
+        aliases:
+          - infrastructure-sentry-module
+          - infrastructure-sentry-module.speculorg.local
+    restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:9000/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:9111/health"]
       interval: 30s
       timeout: 10s
       retries: 3
 
   infrastructure-elk-module:
+    container_name: infrastructure-elk-module
+    hostname: infrastructure-elk-module.speculorg.local
     build:
-      context: ../docker/infrastructure-elk-module
+      context: .
+      dockerfile: ./infrastructure-elk-module/Dockerfile
     ports:
-      - "9012:9000"
+      - "9104:9104"
     volumes:
       - ../configs/:/app/configs/
-      - ../modules/infrastructure-elk-module/config/:/app/config/
+      - ../modules/infrastructure-elk-module/:/app/
       - elk_data:/var/lib/elasticsearch
     env_file:
-      - .env.develop
+      - ../configs/.env.develop
+    environment:
+      - PYTHONUNBUFFERED=1
+      - SERVICE_NAME=infrastructure-elk-module
+      - SERVICE_HOST=0.0.0.0
+      - SERVICE_PORT=9104
     networks:
-      - speculorg_network
+      speculorg_network:
+        ipv4_address: 172.20.1.112
+        aliases:
+          - infrastructure-elk-module
+          - infrastructure-elk-module.speculorg.local
+    restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:9000/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:9104/health"]
       interval: 30s
       timeout: 10s
       retries: 3
 
-  # Сервис управления
-  management-service:
+  infrastructure-docker-module:
+    container_name: infrastructure-docker-module
+    hostname: infrastructure-docker-module.speculorg.local
     build:
-      context: ../docker/management-service
+      context: .
+      dockerfile: ./infrastructure-docker-module/Dockerfile
     ports:
-      - "9013:9000"
+      - "9103:9103"
     volumes:
       - ../configs/:/app/configs/
-      - ../modules/management-service/config/:/app/config/
+      - ../modules/infrastructure-docker-module/:/app/
+      - /var/run/docker.sock:/var/run/docker.sock
     env_file:
-      - .env.develop
+      - ../configs/.env.develop
+    environment:
+      - PYTHONUNBUFFERED=1
+      - SERVICE_NAME=infrastructure-docker-module
+      - SERVICE_HOST=0.0.0.0
+      - SERVICE_PORT=9103
     networks:
-      - speculorg_network
+      speculorg_network:
+        ipv4_address: 172.20.1.113
+        aliases:
+          - infrastructure-docker-module
+          - infrastructure-docker-module.speculorg.local
+    restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:9000/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:9103/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  infrastructure-celery-module:
+    container_name: infrastructure-celery-module
+    hostname: infrastructure-celery-module.speculorg.local
+    build:
+      context: .
+      dockerfile: ./infrastructure-celery-module/Dockerfile
+    ports:
+      - "9100:9100"
+    volumes:
+      - ../configs/:/app/configs/
+      - ../modules/infrastructure-celery-module/:/app/
+    env_file:
+      - ../configs/.env.develop
+    environment:
+      - PYTHONUNBUFFERED=1
+      - SERVICE_NAME=infrastructure-celery-module
+      - SERVICE_HOST=0.0.0.0
+      - SERVICE_PORT=9100
+    networks:
+      speculorg_network:
+        ipv4_address: 172.20.1.114
+        aliases:
+          - infrastructure-celery-module
+          - infrastructure-celery-module.speculorg.local
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9100/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    depends_on:
+      - infrastructure-rabbitmq-module
+      - infrastructure-redis-module
+
+  #############################################
+  # MANAGEMENT SECTION
+  #############################################
+
+  # Management primary service
+  management-service:
+    container_name: management-service
+    hostname: management-service.speculorg.local
+    build:
+      context: .
+      dockerfile: ./management-service/Dockerfile
+    ports:
+      - "9001:9001"
+    volumes:
+      - ../configs/:/app/configs/
+      - ../services/management-service/:/app/
+    env_file:
+      - ../configs/.env.develop
+    environment:
+      - PYTHONUNBUFFERED=1
+      - SERVICE_NAME=management-service
+      - SERVICE_HOST=0.0.0.0
+      - SERVICE_PORT=9001
+    networks:
+      speculorg_network:
+        ipv4_address: 172.20.2.1
+        aliases:
+          - management-service
+          - management-service.speculorg.local
+      external_network:
+        ipv4_address: 172.21.2.1
+        aliases:
+          - management-service
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9001/health"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -277,22 +551,37 @@ services:
       - management-logs-module
       - management-configurations-module
       - management-users-module
+      - management-projects-module
+      - management-settings-module
 
-  # Модули управления
+  # Management modules
   management-logs-module:
+    container_name: management-logs-module
+    hostname: management-logs-module.speculorg.local
     build:
-      context: ../docker/management-logs-module
+      context: .
+      dockerfile: ./management-logs-module/Dockerfile
     ports:
-      - "9014:9000"
+      - "9204:9204"
     volumes:
       - ../configs/:/app/configs/
-      - ../modules/management-logs-module/config/:/app/config/
+      - ../modules/management-logs-module/:/app/
     env_file:
-      - .env.develop
+      - ../configs/.env.develop
+    environment:
+      - PYTHONUNBUFFERED=1
+      - SERVICE_NAME=management-logs-module
+      - SERVICE_HOST=0.0.0.0
+      - SERVICE_PORT=9204
     networks:
-      - speculorg_network
+      speculorg_network:
+        ipv4_address: 172.20.2.101
+        aliases:
+          - management-logs-module
+          - management-logs-module.speculorg.local
+    restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:9000/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:9204/health"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -300,19 +589,32 @@ services:
       - infrastructure-elk-module
 
   management-configurations-module:
+    container_name: management-configurations-module
+    hostname: management-configurations-module.speculorg.local
     build:
-      context: ../docker/management-configurations-module
+      context: .
+      dockerfile: ./management-configurations-module/Dockerfile
     ports:
-      - "9015:9000"
+      - "9201:9201"
     volumes:
       - ../configs/:/app/configs/
-      - ../modules/management-configurations-module/config/:/app/config/
+      - ../modules/management-configurations-module/:/app/
     env_file:
-      - .env.develop
+      - ../configs/.env.develop
+    environment:
+      - PYTHONUNBUFFERED=1
+      - SERVICE_NAME=management-configurations-module
+      - SERVICE_HOST=0.0.0.0
+      - SERVICE_PORT=9201
     networks:
-      - speculorg_network
+      speculorg_network:
+        ipv4_address: 172.20.2.102
+        aliases:
+          - management-configurations-module
+          - management-configurations-module.speculorg.local
+    restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:9000/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:9201/health"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -320,40 +622,140 @@ services:
       - infrastructure-consul-module
 
   management-users-module:
+    container_name: management-users-module
+    hostname: management-users-module.speculorg.local
     build:
-      context: ../docker/management-users-module
+      context: .
+      dockerfile: ./management-users-module/Dockerfile
     ports:
-      - "9016:9000"
+      - "9205:9205"
     volumes:
       - ../configs/:/app/configs/
-      - ../modules/management-users-module/config/:/app/config/
+      - ../modules/management-users-module/:/app/
     env_file:
-      - .env.develop
+      - ../configs/.env.develop
+    environment:
+      - PYTHONUNBUFFERED=1
+      - SERVICE_NAME=management-users-module
+      - SERVICE_HOST=0.0.0.0
+      - SERVICE_PORT=9205
     networks:
-      - speculorg_network
+      speculorg_network:
+        ipv4_address: 172.20.2.103
+        aliases:
+          - management-users-module
+          - management-users-module.speculorg.local
+    restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:9000/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:9205/health"]
       interval: 30s
       timeout: 10s
       retries: 3
     depends_on:
       - infrastructure-database-module
 
-  # Сервис безопасности
-  security-service:
+  management-projects-module:
+    container_name: management-projects-module
+    hostname: management-projects-module.speculorg.local
     build:
-      context: ../docker/security-service
+      context: .
+      dockerfile: ./management-projects-module/Dockerfile
     ports:
-      - "9017:9000"
+      - "9202:9202"
     volumes:
       - ../configs/:/app/configs/
-      - ../modules/security-service/config/:/app/config/
+      - ../modules/management-projects-module/:/app/
     env_file:
-      - .env.develop
+      - ../configs/.env.develop
+    environment:
+      - PYTHONUNBUFFERED=1
+      - SERVICE_NAME=management-projects-module
+      - SERVICE_HOST=0.0.0.0
+      - SERVICE_PORT=9202
     networks:
-      - speculorg_network
+      speculorg_network:
+        ipv4_address: 172.20.2.104
+        aliases:
+          - management-projects-module
+          - management-projects-module.speculorg.local
+    restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:9000/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:9202/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    depends_on:
+      - infrastructure-database-module
+
+  management-settings-module:
+    container_name: management-settings-module
+    hostname: management-settings-module.speculorg.local
+    build:
+      context: .
+      dockerfile: ./management-settings-module/Dockerfile
+    ports:
+      - "9203:9203"
+    volumes:
+      - ../configs/:/app/configs/
+      - ../modules/management-settings-module/:/app/
+    env_file:
+      - ../configs/.env.develop
+    environment:
+      - PYTHONUNBUFFERED=1
+      - SERVICE_NAME=management-settings-module
+      - SERVICE_HOST=0.0.0.0
+      - SERVICE_PORT=9203
+    networks:
+      speculorg_network:
+        ipv4_address: 172.20.2.105
+        aliases:
+          - management-settings-module
+          - management-settings-module.speculorg.local
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9203/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    depends_on:
+      - infrastructure-database-module
+
+  #############################################
+  # SECURITY SECTION
+  #############################################
+
+  # Security primary service
+  security-service:
+    container_name: security-service
+    hostname: security-service.speculorg.local
+    build:
+      context: .
+      dockerfile: ./security-service/Dockerfile
+    ports:
+      - "9002:9002"
+    volumes:
+      - ../configs/:/app/configs/
+      - ../services/security-service/:/app/
+    env_file:
+      - ../configs/.env.develop
+    environment:
+      - PYTHONUNBUFFERED=1
+      - SERVICE_NAME=security-service
+      - SERVICE_HOST=0.0.0.0
+      - SERVICE_PORT=9002
+    networks:
+      speculorg_network:
+        ipv4_address: 172.20.3.1
+        aliases:
+          - security-service
+          - security-service.speculorg.local
+      external_network:
+        ipv4_address: 172.21.3.1
+        aliases:
+          - security-service
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9002/health"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -363,21 +765,34 @@ services:
       - security-authentication-module
       - security-authorization-module
 
-  # Модули безопасности
+  # Security modules
   security-audit-module:
+    container_name: security-audit-module
+    hostname: security-audit-module.speculorg.local
     build:
-      context: ../docker/security-audit-module
+      context: .
+      dockerfile: ./security-audit-module/Dockerfile
     ports:
-      - "9018:9000"
+      - "9301:9301"
     volumes:
       - ../configs/:/app/configs/
-      - ../modules/security-audit-module/config/:/app/config/
+      - ../modules/security-audit-module/:/app/
     env_file:
-      - .env.develop
+      - ../configs/.env.develop
+    environment:
+      - PYTHONUNBUFFERED=1
+      - SERVICE_NAME=security-audit-module
+      - SERVICE_HOST=0.0.0.0
+      - SERVICE_PORT=9301
     networks:
-      - speculorg_network
+      speculorg_network:
+        ipv4_address: 172.20.3.101
+        aliases:
+          - security-audit-module
+          - security-audit-module.speculorg.local
+    restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:9000/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:9301/health"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -385,19 +800,32 @@ services:
       - infrastructure-elk-module
 
   security-authentication-module:
+    container_name: security-authentication-module
+    hostname: security-authentication-module.speculorg.local
     build:
-      context: ../docker/security-authentication-module
+      context: .
+      dockerfile: ./security-authentication-module/Dockerfile
     ports:
-      - "9019:9000"
+      - "9302:9302"
     volumes:
       - ../configs/:/app/configs/
-      - ../modules/security-authentication-module/config/:/app/config/
+      - ../modules/security-authentication-module/:/app/
     env_file:
-      - .env.develop
+      - ../configs/.env.develop
+    environment:
+      - PYTHONUNBUFFERED=1
+      - SERVICE_NAME=security-authentication-module
+      - SERVICE_HOST=0.0.0.0
+      - SERVICE_PORT=9302
     networks:
-      - speculorg_network
+      speculorg_network:
+        ipv4_address: 172.20.3.102
+        aliases:
+          - security-authentication-module
+          - security-authentication-module.speculorg.local
+    restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:9000/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:9302/health"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -405,31 +833,76 @@ services:
       - infrastructure-keycloak-module
 
   security-authorization-module:
+    container_name: security-authorization-module
+    hostname: security-authorization-module.speculorg.local
     build:
-      context: ../docker/security-authorization-module
+      context: .
+      dockerfile: ./security-authorization-module/Dockerfile
     ports:
-      - "9020:9000"
+      - "9303:9303"
     volumes:
       - ../configs/:/app/configs/
-      - ../modules/security-authorization-module/config/:/app/config/
+      - ../modules/security-authorization-module/:/app/
     env_file:
-      - .env.develop
+      - ../configs/.env.develop
+    environment:
+      - PYTHONUNBUFFERED=1
+      - SERVICE_NAME=security-authorization-module
+      - SERVICE_HOST=0.0.0.0
+      - SERVICE_PORT=9303
     networks:
-      - speculorg_network
+      speculorg_network:
+        ipv4_address: 172.20.3.103
+        aliases:
+          - security-authorization-module
+          - security-authorization-module.speculorg.local
+    restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:9000/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:9303/health"]
       interval: 30s
       timeout: 10s
       retries: 3
     depends_on:
       - infrastructure-keycloak-module
 
+#############################################
+# NETWORKS AND VOLUMES
+#############################################
+
 networks:
+  # Internal network for microservices communication
   speculorg_network:
+    name: speculorg-network
     driver: bridge
+    ipam:
+      driver: default
+      config:
+        - subnet: 172.20.0.0/16
+          gateway: 172.20.0.1
+
+  # External network for exposed services
+  external_network:
+    name: speculorg-external
+    driver: bridge
+    ipam:
+      driver: default
+      config:
+        - subnet: 172.21.0.0/16
+          gateway: 172.21.0.1
 
 volumes:
+  # Persistent storage for PostgreSQL database
   postgres_data:
+    name: speculorg-postgres-data
+
+  # Persistent storage for Redis cache
   redis_data:
+    name: speculorg-redis-data
+
+  # Persistent storage for RabbitMQ message broker
   rabbitmq_data:
+    name: speculorg-rabbitmq-data
+
+  # Persistent storage for ELK stack
   elk_data:
+    name: speculorg-elk-data
