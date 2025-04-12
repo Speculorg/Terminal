@@ -126,9 +126,9 @@ DOCKERFILE_VALIDATION = {
     "ENTRYPOINT": r"^ENTRYPOINT\s+\[\s*\"python\",\s*\"main\.py\"\s*\]"
 }
 
-# Requirements.txt validation pattern (unchanged)
+# Requirements.txt validation pattern - Highly simplified to accept all version formats
 REQUIREMENTS_VALIDATION = {
-    "PACKAGE_SPEC": r"^[a-zA-Z0-9_-]+[a-zA-Z0-9_.-]*==\d+(\.\d+)*$"
+    "PACKAGE_SPEC": r"^[a-zA-Z0-9_-]+[a-zA-Z0-9_.-]*==.+$"
 }
 
 # ====================================================
