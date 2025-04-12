@@ -8,10 +8,17 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY ./modules/management-configurations-module/ .
 
+# Environment variables
 ENV PYTHONUNBUFFERED=1
+ENV SERVICE_PORT=9201
+ENV SERVICE_HOST=0.0.0.0
+ENV SERVICE_NAME=management-configurations-module
 
-HEALTHCHECK --interval=30s --timeout=10s --retries=3 CMD ["curl", "-f", "http://localhost:9000/health"]
+# Health check configuration
+HEALTHCHECK --interval=30s --timeout=10s --retries=3 CMD ["curl", "-f", "http://localhost:9201/health"]
 
-EXPOSE 9000
+# Expose port for service
+EXPOSE 9201
 
+# Start application
 ENTRYPOINT ["python", "main.py"]

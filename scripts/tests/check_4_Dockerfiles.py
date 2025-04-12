@@ -110,6 +110,8 @@ MODULES = [
     "management-logs-module",
     "management-configurations-module",
     "management-users-module",
+    "management-projects-module",
+    "management-settings-module",
     "security-audit-module",
     "security-authentication-module",
     "security-authorization-module"
@@ -121,6 +123,10 @@ DOCKERFILE_VALIDATION = {
     "WORKDIR": r"^WORKDIR\s+/app",
     "COPY": r"^COPY\s+.*",  # General COPY instruction; detailed check is done separately
     "RUN_PIP": r"^RUN\s+pip\s+install\s+(--no-cache-dir\s+)?-r\s+requirements\.txt",
+    "ENV_PYTHONUNBUFFERED": r"^ENV\s+PYTHONUNBUFFERED=1",
+    "ENV_SERVICE_PORT": r"^ENV\s+SERVICE_PORT=\d+",
+    "ENV_SERVICE_HOST": r"^ENV\s+SERVICE_HOST=0\.0\.0\.0",
+    "ENV_SERVICE_NAME": r"^ENV\s+SERVICE_NAME=.+",
     "HEALTHCHECK": r"^HEALTHCHECK\s+(--interval=[0-9]+s\s+--timeout=[0-9]+s\s+--retries=[0-9]+\s+)?CMD(\s+\[.*\]|.*)",
     "EXPOSE": r"^EXPOSE\s+\d+",
     "ENTRYPOINT": r"^ENTRYPOINT\s+\[\s*\"python\",\s*\"main\.py\"\s*\]"
@@ -277,6 +283,22 @@ def validate_dockerfile_content(dockerfile_path, log_file, debug_mode, console_e
             
         if results["RUN_PIP"][0] != STATUS_OK and check_dockerfile_run_pip(dockerfile_path, line):
             results["RUN_PIP"] = (STATUS_OK, "")
+            SUCCESS_COUNT += 1
+            
+        if results["ENV_PYTHONUNBUFFERED"][0] != STATUS_OK and check_dockerfile_env_pythonunbuffered(dockerfile_path, line):
+            results["ENV_PYTHONUNBUFFERED"] = (STATUS_OK, "")
+            SUCCESS_COUNT += 1
+            
+        if results["ENV_SERVICE_PORT"][0] != STATUS_OK and check_dockerfile_env_service_port(dockerfile_path, line):
+            results["ENV_SERVICE_PORT"] = (STATUS_OK, "")
+            SUCCESS_COUNT += 1
+            
+        if results["ENV_SERVICE_HOST"][0] != STATUS_OK and check_dockerfile_env_service_host(dockerfile_path, line):
+            results["ENV_SERVICE_HOST"] = (STATUS_OK, "")
+            SUCCESS_COUNT += 1
+            
+        if results["ENV_SERVICE_NAME"][0] != STATUS_OK and check_dockerfile_env_service_name(dockerfile_path, line):
+            results["ENV_SERVICE_NAME"] = (STATUS_OK, "")
             SUCCESS_COUNT += 1
             
         if results["HEALTHCHECK"][0] != STATUS_OK and check_dockerfile_healthcheck(dockerfile_path, line):
@@ -740,6 +762,58 @@ def check_dockerfile_entrypoint(dockerfile_path, line):
     - bool: True if the line matches the ENTRYPOINT pattern, False otherwise
     """
     return re.match(DOCKERFILE_VALIDATION["ENTRYPOINT"], line) is not None
+
+def check_dockerfile_env_pythonunbuffered(dockerfile_path, line):
+    """
+    Checks if the Dockerfile sets the correct PYTHONUNBUFFERED environment variable.
+    
+    Parameters:
+    - dockerfile_path (str): Path to the Dockerfile
+    - line (str): Line from the Dockerfile to check
+    
+    Returns:
+    - bool: True if the line matches the ENV_PYTHONUNBUFFERED pattern, False otherwise
+    """
+    return re.match(DOCKERFILE_VALIDATION["ENV_PYTHONUNBUFFERED"], line) is not None
+
+def check_dockerfile_env_service_port(dockerfile_path, line):
+    """
+    Checks if the Dockerfile sets the correct SERVICE_PORT environment variable.
+    
+    Parameters:
+    - dockerfile_path (str): Path to the Dockerfile
+    - line (str): Line from the Dockerfile to check
+    
+    Returns:
+    - bool: True if the line matches the ENV_SERVICE_PORT pattern, False otherwise
+    """
+    return re.match(DOCKERFILE_VALIDATION["ENV_SERVICE_PORT"], line) is not None
+
+def check_dockerfile_env_service_host(dockerfile_path, line):
+    """
+    Checks if the Dockerfile sets the correct SERVICE_HOST environment variable.
+    
+    Parameters:
+    - dockerfile_path (str): Path to the Dockerfile
+    - line (str): Line from the Dockerfile to check
+    
+    Returns:
+    - bool: True if the line matches the ENV_SERVICE_HOST pattern, False otherwise
+    """
+    return re.match(DOCKERFILE_VALIDATION["ENV_SERVICE_HOST"], line) is not None
+
+def check_dockerfile_env_service_name(dockerfile_path, line):
+    """
+    Checks if the Dockerfile sets the correct SERVICE_NAME environment variable.
+    
+    Parameters:
+    - dockerfile_path (str): Path to the Dockerfile
+    - line (str): Line from the Dockerfile to check
+    
+    Returns:
+    - bool: True if the line matches the ENV_SERVICE_NAME pattern, False otherwise
+    """
+    return re.match(DOCKERFILE_VALIDATION["ENV_SERVICE_NAME"], line) is not None
 
 if __name__ == "__main__":
     main()

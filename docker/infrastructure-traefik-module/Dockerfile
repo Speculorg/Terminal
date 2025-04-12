@@ -8,9 +8,17 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY ./modules/infrastructure-traefik-module/ .
 
+# Environment variables
 ENV PYTHONUNBUFFERED=1
+ENV SERVICE_PORT=9112
+ENV SERVICE_HOST=0.0.0.0
+ENV SERVICE_NAME=infrastructure-traefik-module
 
-HEALTHCHECK --interval=30s --timeout=10s --retries=3 CMD ["curl", "-f", "http://localhost:9000/health"]
-EXPOSE 9000
+# Health check configuration
+HEALTHCHECK --interval=30s --timeout=10s --retries=3 CMD ["curl", "-f", "http://localhost:9112/health"]
 
+# Expose port for service
+EXPOSE 9112
+
+# Start application
 ENTRYPOINT ["python", "main.py"]

@@ -6,19 +6,19 @@ COPY requirements.txt .
 
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY ./modules/security-authentication-module/ .
+COPY ./modules/management-projects-module/ .
 
 # Environment variables
 ENV PYTHONUNBUFFERED=1
-ENV SERVICE_PORT=9302
+ENV SERVICE_PORT=9202
 ENV SERVICE_HOST=0.0.0.0
-ENV SERVICE_NAME=security-authentication-module
+ENV SERVICE_NAME=management-projects-module
 
 # Health check configuration
-HEALTHCHECK --interval=30s --timeout=10s --retries=3 CMD ["curl", "-f", "http://localhost:9302/health"]
+HEALTHCHECK --interval=30s --timeout=10s --retries=3 CMD ["curl", "-f", "http://localhost:9202/health"]
 
 # Expose port for service
-EXPOSE 9302
+EXPOSE 9202
 
 # Start application
-ENTRYPOINT ["python", "main.py"]
+ENTRYPOINT ["python", "main.py"] 
