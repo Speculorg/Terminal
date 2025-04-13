@@ -551,8 +551,6 @@ services:
       - management-logs-module
       - management-configurations-module
       - management-users-module
-      - management-projects-module
-      - management-settings-module
 
   # Management modules
   management-logs-module:
@@ -648,72 +646,6 @@ services:
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:9205/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-    depends_on:
-      - infrastructure-database-module
-
-  management-projects-module:
-    container_name: management-projects-module
-    hostname: management-projects-module.speculorg.local
-    build:
-      context: .
-      dockerfile: ./management-projects-module/Dockerfile
-    ports:
-      - "9202:9202"
-    volumes:
-      - ../configs/:/app/configs/
-      - ../modules/management-projects-module/:/app/
-    env_file:
-      - ../configs/.env.develop
-    environment:
-      - PYTHONUNBUFFERED=1
-      - SERVICE_NAME=management-projects-module
-      - SERVICE_HOST=0.0.0.0
-      - SERVICE_PORT=9202
-    networks:
-      speculorg_network:
-        ipv4_address: 172.20.2.104
-        aliases:
-          - management-projects-module
-          - management-projects-module.speculorg.local
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:9202/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-    depends_on:
-      - infrastructure-database-module
-
-  management-settings-module:
-    container_name: management-settings-module
-    hostname: management-settings-module.speculorg.local
-    build:
-      context: .
-      dockerfile: ./management-settings-module/Dockerfile
-    ports:
-      - "9203:9203"
-    volumes:
-      - ../configs/:/app/configs/
-      - ../modules/management-settings-module/:/app/
-    env_file:
-      - ../configs/.env.develop
-    environment:
-      - PYTHONUNBUFFERED=1
-      - SERVICE_NAME=management-settings-module
-      - SERVICE_HOST=0.0.0.0
-      - SERVICE_PORT=9203
-    networks:
-      speculorg_network:
-        ipv4_address: 172.20.2.105
-        aliases:
-          - management-settings-module
-          - management-settings-module.speculorg.local
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:9203/health"]
       interval: 30s
       timeout: 10s
       retries: 3
