@@ -17,10 +17,10 @@ services:
     ports:
       - "9000:9000"
     volumes:
-      - ../configs/:/app/configs/
+      - ../services/infrastructure-service/config/:/app/config/
       - ../services/infrastructure-service/:/app/
     env_file:
-      - ../configs/.env.develop
+      - ../configs/.env.${ENV_MODE}
     environment:
       - PYTHONUNBUFFERED=1
       - SERVICE_NAME=infrastructure-service
@@ -68,10 +68,10 @@ services:
     ports:
       - "9101:9101"
     volumes:
-      - ../configs/:/app/configs/
+      - ../modules/infrastructure-consul-module/config/:/app/config/
       - ../modules/infrastructure-consul-module/:/app/
     env_file:
-      - ../configs/.env.develop
+      - ../configs/.env.${ENV_MODE}
     environment:
       - PYTHONUNBUFFERED=1
       - SERVICE_NAME=infrastructure-consul-module
@@ -99,10 +99,10 @@ services:
     ports:
       - "9113:9113"
     volumes:
-      - ../configs/:/app/configs/
+      - ../modules/infrastructure-vault-module/config/:/app/config/
       - ../modules/infrastructure-vault-module/:/app/
     env_file:
-      - ../configs/.env.develop
+      - ../configs/.env.${ENV_MODE}
     environment:
       - PYTHONUNBUFFERED=1
       - SERVICE_NAME=infrastructure-vault-module
@@ -130,11 +130,11 @@ services:
     ports:
       - "9102:9102"
     volumes:
-      - ../configs/:/app/configs/
+      - ../modules/infrastructure-database-module/config/:/app/config/
       - ../modules/infrastructure-database-module/:/app/
       - postgres_data:/var/lib/postgresql/data
     env_file:
-      - ../configs/.env.develop
+      - ../configs/.env.${ENV_MODE}
     environment:
       - PYTHONUNBUFFERED=1
       - SERVICE_NAME=infrastructure-database-module
@@ -162,11 +162,11 @@ services:
     ports:
       - "9110:9110"
     volumes:
-      - ../configs/:/app/configs/
+      - ../modules/infrastructure-redis-module/config/:/app/config/
       - ../modules/infrastructure-redis-module/:/app/
       - redis_data:/data
     env_file:
-      - ../configs/.env.develop
+      - ../configs/.env.${ENV_MODE}
     environment:
       - PYTHONUNBUFFERED=1
       - SERVICE_NAME=infrastructure-redis-module
@@ -194,11 +194,11 @@ services:
     ports:
       - "9109:9109"
     volumes:
-      - ../configs/:/app/configs/
+      - ../modules/infrastructure-rabbitmq-module/config/:/app/config/
       - ../modules/infrastructure-rabbitmq-module/:/app/
       - rabbitmq_data:/var/lib/rabbitmq
     env_file:
-      - ../configs/.env.develop
+      - ../configs/.env.${ENV_MODE}
     environment:
       - PYTHONUNBUFFERED=1
       - SERVICE_NAME=infrastructure-rabbitmq-module
@@ -226,10 +226,10 @@ services:
     ports:
       - "9106:9106"
     volumes:
-      - ../configs/:/app/configs/
+      - ../modules/infrastructure-keycloak-module/config/:/app/config/
       - ../modules/infrastructure-keycloak-module/:/app/
     env_file:
-      - ../configs/.env.develop
+      - ../configs/.env.${ENV_MODE}
     environment:
       - PYTHONUNBUFFERED=1
       - SERVICE_NAME=infrastructure-keycloak-module
@@ -259,10 +259,10 @@ services:
       - "80:80"
       - "443:443"
     volumes:
-      - ../configs/:/app/configs/
+      - ../modules/infrastructure-traefik-module/config/:/app/config/
       - ../modules/infrastructure-traefik-module/:/app/
     env_file:
-      - ../configs/.env.develop
+      - ../configs/.env.${ENV_MODE}
     environment:
       - PYTHONUNBUFFERED=1
       - SERVICE_NAME=infrastructure-traefik-module
@@ -294,10 +294,10 @@ services:
     ports:
       - "9107:9107"
     volumes:
-      - ../configs/:/app/configs/
+      - ../modules/infrastructure-opentelemetry-module/config/:/app/config/
       - ../modules/infrastructure-opentelemetry-module/:/app/
     env_file:
-      - ../configs/.env.develop
+      - ../configs/.env.${ENV_MODE}
     environment:
       - PYTHONUNBUFFERED=1
       - SERVICE_NAME=infrastructure-opentelemetry-module
@@ -325,10 +325,10 @@ services:
     ports:
       - "9108:9108"
     volumes:
-      - ../configs/:/app/configs/
+      - ../modules/infrastructure-prometheus-module/config/:/app/config/
       - ../modules/infrastructure-prometheus-module/:/app/
     env_file:
-      - ../configs/.env.develop
+      - ../configs/.env.${ENV_MODE}
     environment:
       - PYTHONUNBUFFERED=1
       - SERVICE_NAME=infrastructure-prometheus-module
@@ -356,10 +356,10 @@ services:
     ports:
       - "9105:9105"
     volumes:
-      - ../configs/:/app/configs/
+      - ../modules/infrastructure-grafana-module/config/:/app/config/
       - ../modules/infrastructure-grafana-module/:/app/
     env_file:
-      - ../configs/.env.develop
+      - ../configs/.env.${ENV_MODE}
     environment:
       - PYTHONUNBUFFERED=1
       - SERVICE_NAME=infrastructure-grafana-module
@@ -387,10 +387,10 @@ services:
     ports:
       - "9111:9111"
     volumes:
-      - ../configs/:/app/configs/
+      - ../modules/infrastructure-sentry-module/config/:/app/config/
       - ../modules/infrastructure-sentry-module/:/app/
     env_file:
-      - ../configs/.env.develop
+      - ../configs/.env.${ENV_MODE}
     environment:
       - PYTHONUNBUFFERED=1
       - SERVICE_NAME=infrastructure-sentry-module
@@ -418,11 +418,11 @@ services:
     ports:
       - "9104:9104"
     volumes:
-      - ../configs/:/app/configs/
+      - ../modules/infrastructure-elk-module/config/:/app/config/
       - ../modules/infrastructure-elk-module/:/app/
       - elk_data:/var/lib/elasticsearch
     env_file:
-      - ../configs/.env.develop
+      - ../configs/.env.${ENV_MODE}
     environment:
       - PYTHONUNBUFFERED=1
       - SERVICE_NAME=infrastructure-elk-module
@@ -450,11 +450,11 @@ services:
     ports:
       - "9103:9103"
     volumes:
-      - ../configs/:/app/configs/
+      - ../modules/infrastructure-docker-module/config/:/app/config/
       - ../modules/infrastructure-docker-module/:/app/
       - /var/run/docker.sock:/var/run/docker.sock
     env_file:
-      - ../configs/.env.develop
+      - ../configs/.env.${ENV_MODE}
     environment:
       - PYTHONUNBUFFERED=1
       - SERVICE_NAME=infrastructure-docker-module
@@ -482,10 +482,10 @@ services:
     ports:
       - "9100:9100"
     volumes:
-      - ../configs/:/app/configs/
+      - ../modules/infrastructure-celery-module/config/:/app/config/
       - ../modules/infrastructure-celery-module/:/app/
     env_file:
-      - ../configs/.env.develop
+      - ../configs/.env.${ENV_MODE}
     environment:
       - PYTHONUNBUFFERED=1
       - SERVICE_NAME=infrastructure-celery-module
@@ -521,10 +521,10 @@ services:
     ports:
       - "9001:9001"
     volumes:
-      - ../configs/:/app/configs/
+      - ../services/management-service/config/:/app/config/
       - ../services/management-service/:/app/
     env_file:
-      - ../configs/.env.develop
+      - ../configs/.env.${ENV_MODE}
     environment:
       - PYTHONUNBUFFERED=1
       - SERVICE_NAME=management-service
@@ -562,10 +562,10 @@ services:
     ports:
       - "9204:9204"
     volumes:
-      - ../configs/:/app/configs/
+      - ../modules/management-logs-module/config/:/app/config/
       - ../modules/management-logs-module/:/app/
     env_file:
-      - ../configs/.env.develop
+      - ../configs/.env.${ENV_MODE}
     environment:
       - PYTHONUNBUFFERED=1
       - SERVICE_NAME=management-logs-module
@@ -595,10 +595,10 @@ services:
     ports:
       - "9201:9201"
     volumes:
-      - ../configs/:/app/configs/
+      - ../modules/management-configurations-module/config/:/app/config/
       - ../modules/management-configurations-module/:/app/
     env_file:
-      - ../configs/.env.develop
+      - ../configs/.env.${ENV_MODE}
     environment:
       - PYTHONUNBUFFERED=1
       - SERVICE_NAME=management-configurations-module
@@ -628,10 +628,10 @@ services:
     ports:
       - "9205:9205"
     volumes:
-      - ../configs/:/app/configs/
+      - ../modules/management-users-module/config/:/app/config/
       - ../modules/management-users-module/:/app/
     env_file:
-      - ../configs/.env.develop
+      - ../configs/.env.${ENV_MODE}
     environment:
       - PYTHONUNBUFFERED=1
       - SERVICE_NAME=management-users-module
@@ -666,10 +666,10 @@ services:
     ports:
       - "9002:9002"
     volumes:
-      - ../configs/:/app/configs/
+      - ../services/security-service/config/:/app/config/
       - ../services/security-service/:/app/
     env_file:
-      - ../configs/.env.develop
+      - ../configs/.env.${ENV_MODE}
     environment:
       - PYTHONUNBUFFERED=1
       - SERVICE_NAME=security-service
@@ -707,10 +707,10 @@ services:
     ports:
       - "9301:9301"
     volumes:
-      - ../configs/:/app/configs/
+      - ../modules/security-audit-module/config/:/app/config/
       - ../modules/security-audit-module/:/app/
     env_file:
-      - ../configs/.env.develop
+      - ../configs/.env.${ENV_MODE}
     environment:
       - PYTHONUNBUFFERED=1
       - SERVICE_NAME=security-audit-module
@@ -740,10 +740,10 @@ services:
     ports:
       - "9302:9302"
     volumes:
-      - ../configs/:/app/configs/
+      - ../modules/security-authentication-module/config/:/app/config/
       - ../modules/security-authentication-module/:/app/
     env_file:
-      - ../configs/.env.develop
+      - ../configs/.env.${ENV_MODE}
     environment:
       - PYTHONUNBUFFERED=1
       - SERVICE_NAME=security-authentication-module
@@ -773,10 +773,10 @@ services:
     ports:
       - "9303:9303"
     volumes:
-      - ../configs/:/app/configs/
+      - ../modules/security-authorization-module/config/:/app/config/
       - ../modules/security-authorization-module/:/app/
     env_file:
-      - ../configs/.env.develop
+      - ../configs/.env.${ENV_MODE}
     environment:
       - PYTHONUNBUFFERED=1
       - SERVICE_NAME=security-authorization-module
