@@ -132,7 +132,7 @@ services:
     volumes:
       - ../modules/infrastructure-database-module/config/:/app/config/
       - ../modules/infrastructure-database-module/:/app/
-      - postgres_data:/var/lib/postgresql/data
+      - ./volumes/postgres_data:/var/lib/postgresql/data
     env_file:
       - ../configs/.env.${ENV_MODE}
     environment:
@@ -164,7 +164,7 @@ services:
     volumes:
       - ../modules/infrastructure-redis-module/config/:/app/config/
       - ../modules/infrastructure-redis-module/:/app/
-      - redis_data:/data
+      - ./volumes/redis_data:/data
     env_file:
       - ../configs/.env.${ENV_MODE}
     environment:
@@ -196,7 +196,7 @@ services:
     volumes:
       - ../modules/infrastructure-rabbitmq-module/config/:/app/config/
       - ../modules/infrastructure-rabbitmq-module/:/app/
-      - rabbitmq_data:/var/lib/rabbitmq
+      - ./volumes/rabbitmq_data:/var/lib/rabbitmq
     env_file:
       - ../configs/.env.${ENV_MODE}
     environment:
@@ -420,7 +420,7 @@ services:
     volumes:
       - ../modules/infrastructure-elk-module/config/:/app/config/
       - ../modules/infrastructure-elk-module/:/app/
-      - elk_data:/var/lib/elasticsearch
+      - ./volumes/elk_data:/var/lib/elasticsearch
     env_file:
       - ../configs/.env.${ENV_MODE}
     environment:
@@ -821,20 +821,3 @@ networks:
       config:
         - subnet: 172.21.0.0/16
           gateway: 172.21.0.1
-
-volumes:
-  # Persistent storage for PostgreSQL database
-  postgres_data:
-    name: speculorg-postgres-data
-
-  # Persistent storage for Redis cache
-  redis_data:
-    name: speculorg-redis-data
-
-  # Persistent storage for RabbitMQ message broker
-  rabbitmq_data:
-    name: speculorg-rabbitmq-data
-
-  # Persistent storage for ELK stack
-  elk_data:
-    name: speculorg-elk-data
