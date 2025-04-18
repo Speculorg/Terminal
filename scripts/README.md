@@ -1,3 +1,3 @@
-# scripts
+# Scripts Directory
 
-This directory contains utility scripts and tools for automating tasks in the Speculorg.Terminal project.
+This directory contains utility scripts for bootstrapping the environment and checking service readiness.

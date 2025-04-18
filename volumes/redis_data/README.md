@@ -1,3 +1,3 @@
-# redis_data
+# Redis Data Volume
 
-This directory contains Redis files for development. Data is preserved between container restarts.
+This directory contains the persistent data storage for the Redis service.

@@ -1,3 +1,3 @@
-# vault_data
+# Vault Data Volume
 
-This directory contains Vault files for development. Data is preserved between container restarts.
+This directory contains the persistent storage for Vault data.

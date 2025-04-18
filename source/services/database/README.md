@@ -1,3 +1,3 @@
 # Database Service
 
-This directory contains source code for Speculorg.Terminal.Database.Service.
+This directory contains the PostgreSQL and TimescaleDB initialization scripts and Docker configuration for the Database Service.

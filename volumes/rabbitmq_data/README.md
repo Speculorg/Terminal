@@ -1,3 +1,3 @@
-# rabbitmq_data
+# RabbitMQ Data Volume
 
-This directory contains RabbitMQ files for development. Data is preserved between container restarts.
+This directory contains persistent storage for the RabbitMQ message broker data.

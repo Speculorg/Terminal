@@ -1,3 +1,3 @@
-# consul_data
+# Consul Data Volume
 
-This directory contains Consul files for development. Data is preserved between container restarts.
+This directory contains persistent data for the Consul service, including its key‑value store and state files.

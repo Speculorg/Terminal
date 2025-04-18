@@ -1,3 +1,3 @@
-# configs
+# Configs
 
-This directory contains the static configuration files for the Terminal project.
+This directory contains environment variable files and the Docker Compose configuration for the project.

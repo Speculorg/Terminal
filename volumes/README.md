@@ -1,3 +1,3 @@
-# Volumes
+# Volumes Directory
 
-This directory contains bind-mounted folders for persistent data storage during development.
+This directory contains bind-mount data directories for stateful services used by Docker Compose.

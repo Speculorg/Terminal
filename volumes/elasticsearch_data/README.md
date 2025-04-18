@@ -1,3 +1,3 @@
-# elk_data
+# Elasticsearch Data Volume
 
-This directory contains Elasticsearch files for development. Data is preserved between container restarts.
+This directory contains the persistent data files for the Elasticsearch service.

@@ -1,3 +1,3 @@
 # Redis Service
 
-This directory contains source code for Speculorg.Terminal.Redis.Service.
+This directory contains the Redis service configuration and initialization files for caching and Celery message brokering.

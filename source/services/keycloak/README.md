@@ -1,3 +1,3 @@
 # Keycloak Service
 
-This directory contains source code for Speculorg.Terminal.Keycloak.Service.
+This directory contains the Docker configuration and themes for the Keycloak identity and access management service.

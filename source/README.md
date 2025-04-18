@@ -1,3 +1,3 @@
-# source
+# Source Directory
 
-This directory contains source codes for all components in the Speculorg.Terminal project.
+This directory contains all service and adapter source code for Speculorg.Terminal.

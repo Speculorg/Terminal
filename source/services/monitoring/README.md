@@ -1,3 +1,3 @@
 # Monitoring Service
 
-This directory contains source code for Speculorg.Terminal.Monitoring.Service.
+This directory contains the Monitoring Service, including configurations and modules for Prometheus, Grafana, and the OpenTelemetry Collector.

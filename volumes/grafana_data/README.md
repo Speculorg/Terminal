@@ -1,3 +1,3 @@
-# grafana_data
+# Grafana Data Volume
 
-This directory contains Grafana files for development. Data is preserved between container restarts.
+This directory contains persistent storage for Grafana data, including dashboards and configuration.

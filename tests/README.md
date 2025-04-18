@@ -1,3 +1,3 @@
-# tests
+# Tests
 
-This directory contains the source code of tests for Speculorg.Terminal system checks.
+This directory contains the test suites for verifying the health and functionality of Speculorg.Terminal services.

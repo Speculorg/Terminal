@@ -1,3 +1,3 @@
-# postgres_data
+# PostgreSQL Data Volume
 
-This directory contains PostgreSQL database files for development. Data is preserved between container restarts.
+This directory contains the persistent storage for the Database Service (PostgreSQL + TimescaleDB) data files.
