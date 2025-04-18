@@ -1,9 +1,0 @@
-# Security Service Configuration
-
-# Service Information
-service:
-  name: security-service
-  version: 0.0.1
-  description: Security service for Terminal project
-  host: 0.0.0.0
-  port: 9001

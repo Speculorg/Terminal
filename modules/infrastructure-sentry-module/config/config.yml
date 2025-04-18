@@ -1,7 +1,0 @@
-# Sentry Module Configuration
-
-# Module Information
-module:
-  name: infrastructure-sentry-module
-  version: 0.0.1
-  description: Sentry infrastructure module for error tracking and monitoring

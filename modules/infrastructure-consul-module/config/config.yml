@@ -1,7 +1,0 @@
-# Consul Module Configuration
-
-# Module Information
-module:
-  name: infrastructure-consul-module
-  version: 0.0.1
-  description: Consul infrastructure module for service discovery and configuration

@@ -1,7 +1,0 @@
-# Users Module Configuration
-
-# Module Information
-module:
-  name: management-users-module
-  version: 0.0.1
-  description: Users management module for user management

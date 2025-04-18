@@ -1,7 +1,0 @@
-# Celery Module Configuration
-
-# Module Information
-module:
-  name: infrastructure-celery-module
-  version: 0.0.1
-  description: Celery infrastructure module for distributed task processing

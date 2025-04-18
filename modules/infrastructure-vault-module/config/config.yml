@@ -1,7 +1,0 @@
-# Vault Module Configuration
-
-# Module Information
-module:
-  name: infrastructure-vault-module
-  version: 0.0.1
-  description: Vault infrastructure module for secrets management

@@ -1,7 +1,0 @@
-# RabbitMQ Module Configuration
-
-# Module Information
-module:
-  name: infrastructure-rabbitmq-module
-  version: 0.0.1
-  description: RabbitMQ infrastructure module for messaging and queuing

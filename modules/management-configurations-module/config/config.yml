@@ -1,7 +1,0 @@
-# Configurations Module Configuration
-
-# Module Information
-module:
-  name: management-configurations-module
-  version: 0.0.1
-  description: Configurations management module for configuration management

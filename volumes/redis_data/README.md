@@ -1,3 +1,3 @@
 # redis_data
 
-This folder holds Redis cache and persistence data for development. Data persists across container cycles.
+This directory contains Redis files for development. Data is preserved between container restarts.

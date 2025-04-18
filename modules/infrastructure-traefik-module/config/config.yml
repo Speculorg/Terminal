@@ -1,7 +1,0 @@
-# Traefik Module Configuration
-
-# Module Information
-module:
-  name: infrastructure-traefik-module
-  version: 0.0.1
-  description: Traefik infrastructure module for reverse proxy and load balancer
