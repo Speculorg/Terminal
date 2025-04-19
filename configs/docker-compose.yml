@@ -1,3 +1,268 @@
 # Speculorg.Terminal Docker Compose Configuration
 # This file defines the container orchestration for the Speculorg microservices architecture
 # Last updated: 2025.04.18
+
+# Terminal/configs/docker-compose.yml
+
+###############################
+#          Services           #
+###############################
+services:
+
+  ############  Edge / Proxy  ############
+  traefik:
+    container_name: traefik.service
+    env_file:
+      - ./.env.${ENV_MODE}
+    build:
+      context: ../source/services/traefik
+    command:
+      - "--providers.docker=true"
+      - "--providers.docker.exposedByDefault=false"
+      - "--entryPoints.web.address=:9000"
+      - "--api.dashboard=true"
+    ports:
+      - "9000:9000"
+    networks:
+      - net_public
+      - net_private
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    restart: unless-stopped
+    labels:
+      - traefik.enable=true
+      # Route Keycloak UI through Traefik
+      - traefik.http.routers.keycloak.rule=Host(`keycloak.local`)
+      - traefik.http.routers.keycloak.entrypoints=web
+      - traefik.http.services.keycloak.loadbalancer.server.port=8080
+      # Route Grafana UI
+      - traefik.http.routers.grafana.rule=Host(`grafana.local`)
+      - traefik.http.routers.grafana.entrypoints=web
+      - traefik.http.services.grafana.loadbalancer.server.port=3000
+      # Route Kibana UI
+      - traefik.http.routers.kibana.rule=Host(`kibana.local`)
+      - traefik.http.routers.kibana.entrypoints=web
+      - traefik.http.services.kibana.loadbalancer.server.port=5601
+
+  ############  Core Infrastructure  ############
+  consul:
+    container_name: consul.service
+    env_file:
+      - ./.env.${ENV_MODE}
+    build:
+      context: ../source/services/consul
+    ports:
+      - "8500:8500"        # Consul UI/API
+    networks:
+      - net_private
+    volumes:
+      - ../volumes/consul_data:/consul/data
+    restart: unless-stopped
+
+  vault:
+    container_name: vault.service
+    env_file:
+      - ./.env.${ENV_MODE}
+    build:
+      context: ../source/services/vault
+    cap_add:
+      - IPC_LOCK            # prevent secret data from being swapped
+    ports:
+      - "8200:8200"        # Vault UI/API
+    networks:
+      - net_private
+    environment:
+      VAULT_DEV_ROOT_TOKEN_ID: ${VAULT_DEV_ROOT_TOKEN_ID:-root}
+      VAULT_DEV_LISTEN_ADDRESS: "0.0.0.0:8200"
+    volumes:
+      - ../volumes/vault_data:/vault/file
+    depends_on:
+      - consul
+    restart: unless-stopped
+
+  database:
+    container_name: database.service
+    env_file:
+      - ./.env.${ENV_MODE}
+    build:
+      context: ../source/services/database
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-speculorg}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-speculpwd}
+      POSTGRES_DB: ${POSTGRES_DB:-speculorg}
+    ports:
+      - "5432:5432"        # Postgres & TimescaleDB
+    networks:
+      - net_private
+    volumes:
+      - ../volumes/postgres_data:/var/lib/postgresql/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER"]
+      interval: 10s
+      retries: 5
+
+  redis:
+    container_name: redis.service
+    env_file:
+      - ./.env.${ENV_MODE}
+    build:
+      context: ../source/services/redis
+    ports:
+      - "6379:6379"        # Redis cache / broker
+    networks:
+      - net_private
+    volumes:
+      - ../volumes/redis_data:/data
+    restart: unless-stopped
+
+  rabbitmq:
+    container_name: rabbitmq.service
+    env_file:
+      - ./.env.${ENV_MODE}
+    build:
+      context: ../source/services/rabbitmq
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_DEFAULT_USER:-guest}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_DEFAULT_PASS:-guest}
+    ports:
+      - "5672:5672"        # AMQP port
+      - "15672:15672"      # Management UI
+    networks:
+      - net_private
+    volumes:
+      - ../volumes/rabbitmq_data:/var/lib/rabbitmq
+    restart: unless-stopped
+
+  keycloak:
+    container_name: keycloak.service
+    env_file:
+      - ./.env.${ENV_MODE}
+    build:
+      context: ../source/services/keycloak
+    environment:
+      KEYCLOAK_ADMIN: ${KC_ADMIN:-admin}
+      KEYCLOAK_ADMIN_PASSWORD: ${KC_ADMIN_PASS:-admin}
+      KC_DB: postgres
+      KC_DB_URL_HOST: database.service
+      KC_DB_URL_DATABASE: ${POSTGRES_DB:-speculorg}
+      KC_DB_USERNAME: ${POSTGRES_USER:-speculorg}
+      KC_DB_PASSWORD: ${POSTGRES_PASSWORD:-speculpwd}
+    depends_on:
+      - database
+    networks:
+      - net_private
+    restart: unless-stopped
+
+  ############  Microservices  ############
+  infrastructure:
+    container_name: infrastructure.service
+    env_file:
+      - ./.env.${ENV_MODE}
+    build:
+      context: ../source/services/infrastructure
+    ports:
+      - "9001:9001"        # Infrastructure API
+    networks:
+      - net_private
+    depends_on:
+      - consul
+      - vault
+      - database
+      - redis
+      - rabbitmq
+    restart: unless-stopped
+
+  monitoring:
+    container_name: monitoring.service
+    env_file:
+      - ./.env.${ENV_MODE}
+    build:
+      context: ../source/services/monitoring
+    ports:
+      # Grafana доступен через Traefik, но оставим порт наружу для отладки при необходимости
+      - "9090:9090"   # Prometheus
+      - "3000:3000"   # Grafana
+    networks:
+      - net_private
+    volumes:
+      - ../volumes/grafana_data:/var/lib/grafana
+      - ../volumes/elasticsearch_data:/prom_data   # опционально
+    depends_on:
+      - infrastructure
+    restart: unless-stopped
+
+  logging:
+    container_name: logging.service
+    env_file:
+      - ./.env.${ENV_MODE}
+    build:
+      context: ../source/services/logging
+    environment:
+      discovery.type: single-node
+    ports:
+      - "9200:9200"        # Elasticsearch
+      - "5601:5601"        # Kibana (also routed via Traefik)
+    networks:
+      - net_private
+    volumes:
+      - ../volumes/elasticsearch_data:/usr/share/elasticsearch/data
+    depends_on:
+      - infrastructure
+    restart: unless-stopped
+
+  security:
+    container_name: security.service
+    env_file:
+      - ./.env.${ENV_MODE}
+    build:
+      context: ../source/services/security
+    ports:
+      - "9002:9002"        # Security API
+    networks:
+      - net_private
+    depends_on:
+      - keycloak
+      - infrastructure
+    restart: unless-stopped
+
+  management:
+    container_name: management.service
+    env_file:
+      - ./.env.${ENV_MODE}
+    build:
+      context: ../source/services/management
+    ports:
+      - "9003:9003"        # Management API
+    networks:
+      - net_private
+    depends_on:
+      - security
+      - logging
+      - infrastructure
+    restart: unless-stopped
+
+  integration:
+    container_name: integration.service
+    env_file:
+      - ./.env.${ENV_MODE}
+    build:
+      context: ../source/services/integration
+    ports:
+      - "9004:9004"        # Integration API
+    networks:
+      - net_private
+    depends_on:
+      - rabbitmq
+      - infrastructure
+    restart: unless-stopped
+
+###############################
+#            Networks         #
+###############################
+networks:
+  net_private:
+    driver: bridge
+    internal: true
+  net_public:
+    driver: bridge
