@@ -1,0 +1,21 @@
+# File: source/services/traefik/traefik.yml
+
+# Entrypoints define the ports Traefik listens on
+entryPoints:
+  web:
+    address: ":9000"          # Dashboard & API
+
+# Enable and expose the Traefik API & Dashboard
+api:
+  dashboard: true             # Serve the dashboard UI
+  # insecure: true              # Allow access without auth (dev only)
+
+# Configure the Docker provider to discover services automatically
+providers:
+  docker:
+    endpoint: "unix:///var/run/docker.sock"
+    exposedByDefault: false   # Only route containers labeled with traefik.enable=true
+
+# Enable basic logging
+log:
+  level: INFO

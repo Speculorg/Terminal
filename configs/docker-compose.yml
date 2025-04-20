@@ -17,6 +17,8 @@ services:
     build:
       context: ../source/services/traefik
     command:
+      - "--configFile=/etc/traefik/traefik.yml"
+      - "--api.dashboard=true"
       - "--providers.docker=true"
       - "--providers.docker.exposedByDefault=false"
       - "--entryPoints.web.address=:9000"
@@ -30,19 +32,11 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock:ro
     restart: unless-stopped
     labels:
-      - traefik.enable=true
-      # Route Keycloak UI through Traefik
-      - traefik.http.routers.keycloak.rule=Host(`keycloak.local`)
-      - traefik.http.routers.keycloak.entrypoints=web
-      - traefik.http.services.keycloak.loadbalancer.server.port=8080
-      # Route Grafana UI
-      - traefik.http.routers.grafana.rule=Host(`grafana.local`)
-      - traefik.http.routers.grafana.entrypoints=web
-      - traefik.http.services.grafana.loadbalancer.server.port=3000
-      # Route Kibana UI
-      - traefik.http.routers.kibana.rule=Host(`kibana.local`)
-      - traefik.http.routers.kibana.entrypoints=web
-      - traefik.http.services.kibana.loadbalancer.server.port=5601
+      - "traefik.enable=true"
+      # Router для Dashboard и API
+      - "traefik.http.routers.traefik-dashboard.entrypoints=web"
+      - "traefik.http.routers.traefik-dashboard.rule=PathPrefix(`/dashboard`) || PathPrefix(`/api`)"
+      - "traefik.http.routers.traefik-dashboard.service=api@internal"
 
   ############  Core Infrastructure  ############
   consul:
