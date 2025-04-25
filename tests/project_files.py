@@ -3,11 +3,12 @@
 
 """
 Project Structure Analyzer
-Version: 0.1
+Version: 0.2
 Author: Speculorg Team
 Description: Script for analyzing and visualizing project directory structure
 Algorithm: Recursive directory traversal with tree-like visualization
 Version History:
+    - 0.2: Added support for .gitignore and custom file filters
     - 0.1: Initial version with basic functionality
 """
 
@@ -17,10 +18,11 @@ import logging
 from datetime import datetime
 from pathlib import Path
 from typing import List, Optional
+import fnmatch
 
 
 # Constants
-SCRIPT_VERSION = "0.1"
+SCRIPT_VERSION = "0.2"
 SCRIPT_AUTHOR = "AI Assistant"
 SCRIPT_DESCRIPTION = "Project Structure Analyzer"
 LOG_DIR = "logs"  # Directory for log files
@@ -35,6 +37,13 @@ ICONS = {
     'directory': '📁',
     'file': '📄'
 }
+
+# Filter settings
+USE_GITIGNORE = True  # Enable .gitignore filtering by default
+CUSTOM_FILTERS = [
+    'logs/*',  # Exclude logs directory
+    '**/README.md'  # Exclude all README.md files
+]
 
 
 class ProjectAnalyzer:
@@ -57,6 +66,49 @@ class ProjectAnalyzer:
             'total_files': 0,
             'total_size': 0
         }
+        self.gitignore_patterns = set()
+        if USE_GITIGNORE:
+            self._load_gitignore()
+
+    def _load_gitignore(self) -> None:
+        """Load patterns from .gitignore file"""
+        gitignore_path = self.root_dir / '.gitignore'
+        if gitignore_path.exists():
+            with open(gitignore_path, 'r', encoding='utf-8') as f:
+                for line in f:
+                    line = line.strip()
+                    if line and not line.startswith('#'):
+                        self.gitignore_patterns.add(line)
+
+    def _should_exclude(self, path: Path) -> bool:
+        """
+        Check if path should be excluded based on filters
+
+        Args:
+            path (Path): Path to check
+
+        Returns:
+            bool: True if path should be excluded
+        """
+        # Check basic exclude dirs
+        if path.name in self.exclude_dirs:
+            return True
+
+        # Convert path to relative string for pattern matching
+        rel_path = str(path.relative_to(self.root_dir))
+
+        # Check .gitignore patterns
+        if USE_GITIGNORE:
+            for pattern in self.gitignore_patterns:
+                if fnmatch.fnmatch(rel_path, pattern):
+                    return True
+
+        # Check custom filters
+        for pattern in CUSTOM_FILTERS:
+            if fnmatch.fnmatch(rel_path, pattern):
+                return True
+
+        return False
 
     def setup_logging(self) -> str:
         """
@@ -137,6 +189,25 @@ class ProjectAnalyzer:
         # Return combined list with directories first
         return dirs + files
 
+    def _get_next_prefix(self, prefix: str, is_last: bool) -> str:
+        """
+        Get prefix for the next level in the tree
+
+        Args:
+            prefix (str): Current prefix
+            is_last (bool): Whether current item is last in its level
+
+        Returns:
+            str: Prefix for the next level
+        """
+        # Обеспечиваем одинаковую ширину префикса для выравнивания
+        if is_last:
+            # Для последнего элемента добавляем пробелы
+            return prefix + '    '  # Четыре пробела для выравнивания
+        else:
+            # Для не последнего элемента добавляем вертикальную линию
+            return prefix + f"{TREE_SYMBOLS['vertical']} "
+
     def print_tree(self, path: Path, prefix: str = '', is_last: bool = True,
                   is_root: bool = False) -> None:
         """
@@ -148,8 +219,8 @@ class ProjectAnalyzer:
             is_last (bool): Whether current item is last in its level
             is_root (bool): Whether this is the root directory
         """
-        # Skip excluded directories
-        if path.name in self.exclude_dirs:
+        # Skip excluded paths
+        if self._should_exclude(path):
             return
 
         # Update statistics
@@ -162,7 +233,10 @@ class ProjectAnalyzer:
             if is_root:
                 logging.info(f"{ICONS['directory']} {path.name}/")
             else:
-                branch = TREE_SYMBOLS['last_branch'] if is_last else TREE_SYMBOLS['branch']
+                if is_last:
+                    branch = TREE_SYMBOLS['last_branch']
+                else:
+                    branch = TREE_SYMBOLS['branch']
                 logging.info(
                     f"{prefix}{branch}{TREE_SYMBOLS['horizontal']} "
                     f"{ICONS['directory']} {path.name}/"
@@ -170,9 +244,14 @@ class ProjectAnalyzer:
 
             # Process contents
             items = self.sort_items(list(path.iterdir()))
-            for i, item in enumerate(items):
-                is_last_item = i == len(items) - 1
-                new_prefix = prefix + (' ' if is_last else f"{TREE_SYMBOLS['vertical']} ")
+            # Filter out excluded items before processing
+            visible_items = [
+                item for item in items if not self._should_exclude(item)
+            ]
+
+            for i, item in enumerate(visible_items):
+                is_last_item = i == len(visible_items) - 1
+                new_prefix = self._get_next_prefix(prefix, is_last)
                 self.print_tree(item, new_prefix, is_last_item)
         else:
             self.stats['total_files'] += 1
@@ -180,7 +259,10 @@ class ProjectAnalyzer:
             self.stats['total_size'] += size
 
             # Print file
-            branch = TREE_SYMBOLS['last_branch'] if is_last else TREE_SYMBOLS['branch']
+            if is_last:
+                branch = TREE_SYMBOLS['last_branch']
+            else:
+                branch = TREE_SYMBOLS['branch']
             logging.info(
                 f"{prefix}{branch}{TREE_SYMBOLS['horizontal']} "
                 f"{ICONS['file']} {path.name} ({self.format_size(size)})"
