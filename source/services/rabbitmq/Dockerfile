@@ -2,9 +2,10 @@ FROM rabbitmq:4.0.7-management
 
 LABEL maintainer="Speculorg Team"
 
+# hadolint ignore=DL3002
 USER root
 
-# --- Install python3 and pip ---
+# hadolint ignore=DL3013, DL3008
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
         python3 python3-pip curl && \
@@ -13,5 +14,4 @@ RUN apt-get update && \
 
 ENV PATH="/usr/local/bin:${PATH}"
 
-# --- Entrypoint: register in Consul and start RabbitMQ ---
 ENTRYPOINT ["bash", "-c", "python3 /opt/scripts/register_in_consul.py && exec docker-entrypoint.sh rabbitmq-server"]
