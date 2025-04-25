@@ -1,14 +1,18 @@
-# File: source/services/traefik/Dockerfile
+######## Python layer ########
+FROM python:3.13-alpine AS py
 
-# Use the official Traefik v3.3.4 image as base
+LABEL maintainer="Speculorg Team"
+
+RUN pip install --no-cache-dir requests
+
+######## Traefik ########
 FROM traefik:v3.3.4
 
-# Copy our static configuration into the container
-# Traefik will look for /etc/traefik/traefik.yml by default
+USER root
+COPY --from=py /usr/local /usr/local
+ENV PATH="/usr/local/bin:${PATH}"
+
 COPY traefik.yml /etc/traefik/traefik.yml
+# COPY register_in_consul.py /opt/register_in_consul.py
 
-# Expose the dashboard port
-EXPOSE 9000
-
-# No CMD or ENTRYPOINT needed, we rely on docker-compose 'command' to pass flags
-# If omitted, the image's default ENTRYPOINT is used (the traefik binary)
+ENTRYPOINT ["sh", "-c", "python3 /opt/scripts/register_in_consul.py && exec traefik"]

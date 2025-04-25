@@ -4,6 +4,7 @@
 
 # Terminal/configs/docker-compose.yml
 
+
 ###############################
 #          Services           #
 ###############################
@@ -16,27 +17,32 @@ services:
       - ./.env.${ENV_MODE}
     build:
       context: ../source/services/traefik
+    environment:
+      SERVICE_NAME: traefik
+      SERVICE_PORT: 9000
     command:
       - "--configFile=/etc/traefik/traefik.yml"
       - "--api.dashboard=true"
       - "--providers.docker=true"
       - "--providers.docker.exposedByDefault=false"
       - "--entryPoints.web.address=:9000"
-      - "--api.dashboard=true"
-    ports:
-      - "9000:9000"
     networks:
       - net_public
       - net_private
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
+      - shared_scripts:/opt/scripts:ro
     restart: unless-stopped
     labels:
       - "traefik.enable=true"
-      # Router для Dashboard и API
-      - "traefik.http.routers.traefik-dashboard.entrypoints=web"
-      - "traefik.http.routers.traefik-dashboard.rule=PathPrefix(`/dashboard`) || PathPrefix(`/api`)"
-      - "traefik.http.routers.traefik-dashboard.service=api@internal"
+      - "traefik.http.routers.traefik.rule=PathPrefix(`/dashboard`) || PathPrefix(`/api`)"
+      - "traefik.http.routers.traefik.entrypoints=web"
+      - "traefik.http.services.traefik.loadbalancer.server.port=9000"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:9000/api/rawdata"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
 
   ############  Core Infrastructure  ############
   consul:
@@ -45,13 +51,24 @@ services:
       - ./.env.${ENV_MODE}
     build:
       context: ../source/services/consul
-    ports:
-      - "8500:8500"        # Consul UI/API
+    environment:
+      SERVICE_NAME: consul
+      SERVICE_PORT: 8500
     networks:
       - net_private
     volumes:
-      - ../volumes/consul_data:/consul/data
+      - consul_data:/consul/data
     restart: unless-stopped
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.consul.rule=Host(`consul.local`)"
+      - "traefik.http.routers.consul.entrypoints=web"
+      - "traefik.http.services.consul.loadbalancer.server.port=8500"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8500/v1/status/leader"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
 
   vault:
     container_name: vault.service
@@ -61,18 +78,30 @@ services:
       context: ../source/services/vault
     cap_add:
       - IPC_LOCK            # prevent secret data from being swapped
-    ports:
-      - "8200:8200"        # Vault UI/API
     networks:
       - net_private
     environment:
+      SERVICE_NAME: vault
+      SERVICE_PORT: 8200
       VAULT_DEV_ROOT_TOKEN_ID: ${VAULT_DEV_ROOT_TOKEN_ID:-root}
       VAULT_DEV_LISTEN_ADDRESS: "0.0.0.0:8200"
     volumes:
-      - ../volumes/vault_data:/vault/file
+      - vault_data:/vault/file
+      - shared_scripts:/opt/scripts:ro
     depends_on:
       - consul
-    restart: unless-stopped
+    restart:
+      unless-stopped
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.vault.rule=Host(`vault.local`)"
+      - "traefik.http.routers.vault.entrypoints=web"
+      - "traefik.http.services.vault.loadbalancer.server.port=8200"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8200/v1/sys/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
 
   database:
     container_name: database.service
@@ -81,15 +110,16 @@ services:
     build:
       context: ../source/services/database
     environment:
+      SERVICE_NAME: database
+      SERVICE_PORT: 5432
       POSTGRES_USER: ${POSTGRES_USER:-speculorg}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-speculpwd}
       POSTGRES_DB: ${POSTGRES_DB:-speculorg}
-    ports:
-      - "5432:5432"        # Postgres & TimescaleDB
     networks:
       - net_private
     volumes:
-      - ../volumes/postgres_data:/var/lib/postgresql/data
+      - postgres_data:/var/lib/postgresql/data
+      - shared_scripts:/opt/scripts:ro
     restart: unless-stopped
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER"]
@@ -102,13 +132,20 @@ services:
       - ./.env.${ENV_MODE}
     build:
       context: ../source/services/redis
-    ports:
-      - "6379:6379"        # Redis cache / broker
+    environment:
+      SERVICE_NAME: redis
+      SERVICE_PORT: 6379
     networks:
       - net_private
     volumes:
-      - ../volumes/redis_data:/data
+      - redis_data:/data
+      - shared_scripts:/opt/scripts:ro
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
 
   rabbitmq:
     container_name: rabbitmq.service
@@ -117,36 +154,61 @@ services:
     build:
       context: ../source/services/rabbitmq
     environment:
+      SERVICE_NAME: rabbitmq
+      SERVICE_PORT: 5672
       RABBITMQ_DEFAULT_USER: ${RABBITMQ_DEFAULT_USER:-guest}
       RABBITMQ_DEFAULT_PASS: ${RABBITMQ_DEFAULT_PASS:-guest}
-    ports:
-      - "5672:5672"        # AMQP port
-      - "15672:15672"      # Management UI
     networks:
       - net_private
     volumes:
-      - ../volumes/rabbitmq_data:/var/lib/rabbitmq
+      - rabbitmq_data:/var/lib/rabbitmq
+      - shared_scripts:/opt/scripts:ro
     restart: unless-stopped
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.rabbitmq.rule=Host(`rabbitmq.local`)"
+      - "traefik.http.routers.rabbitmq.entrypoints=web"
+      - "traefik.http.services.rabbitmq.loadbalancer.server.port=15672"
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "status", "-q"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
   keycloak:
     container_name: keycloak.service
     env_file:
       - ./.env.${ENV_MODE}
-    build:
-      context: ../source/services/keycloak
     environment:
-      KEYCLOAK_ADMIN: ${KC_ADMIN:-admin}
-      KEYCLOAK_ADMIN_PASSWORD: ${KC_ADMIN_PASS:-admin}
+      SERVICE_NAME: keycloak
+      SERVICE_PORT: 8080
       KC_DB: postgres
       KC_DB_URL_HOST: database.service
-      KC_DB_URL_DATABASE: ${POSTGRES_DB:-speculorg}
-      KC_DB_USERNAME: ${POSTGRES_USER:-speculorg}
-      KC_DB_PASSWORD: ${POSTGRES_PASSWORD:-speculpwd}
+      KC_DB_URL_PORT: 5432
+      KC_DB_URL_DATABASE: speculorg
+      KC_DB_USERNAME: speculorg
+      KC_DB_PASSWORD: speculpwd
+      KEYCLOAK_ADMIN: admin
+      KEYCLOAK_ADMIN_PASSWORD: admin
+    build:
+      context: ../source/services/keycloak
     depends_on:
       - database
     networks:
       - net_private
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.keycloak.rule=Host(`keycloak.local`)"
+      - "traefik.http.routers.keycloak.entrypoints=web"
+      - "traefik.http.services.keycloak.loadbalancer.server.port=8080"
+    volumes:
+      - shared_scripts:/opt/scripts:ro
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8080/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
   ############  Microservices  ############
   infrastructure:
@@ -180,8 +242,8 @@ services:
     networks:
       - net_private
     volumes:
-      - ../volumes/grafana_data:/var/lib/grafana
-      - ../volumes/elasticsearch_data:/prom_data   # опционально
+      - grafana_data:/var/lib/grafana
+      - prometheus_data:/prom_data
     depends_on:
       - infrastructure
     restart: unless-stopped
@@ -200,7 +262,7 @@ services:
     networks:
       - net_private
     volumes:
-      - ../volumes/elasticsearch_data:/usr/share/elasticsearch/data
+      - elasticsearch_data:/usr/share/elasticsearch/data
     depends_on:
       - infrastructure
     restart: unless-stopped
@@ -250,6 +312,73 @@ services:
       - rabbitmq
       - infrastructure
     restart: unless-stopped
+
+###############################
+#          Volumes            #
+###############################
+volumes:
+  consul_data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ../volumes/consul_data
+
+  vault_data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ../volumes/vault_data
+
+  postgres_data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ../volumes/postgres_data
+
+  redis_data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ../volumes/redis_data
+
+  rabbitmq_data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ../volumes/rabbitmq_data
+
+  elasticsearch_data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ../volumes/elasticsearch_data
+
+  grafana_data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ../volumes/grafana_data
+
+  prometheus_data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ../volumes/prometheus_data
+
+  shared_scripts:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ../volumes/shared_scripts
 
 ###############################
 #            Networks         #
