@@ -1,8 +1,13 @@
-# Consul 1.20.5 – без лишних слоёв
+FROM python:3.13-alpine AS py
+
+RUN pip install --no-cache-dir requests
+
 FROM hashicorp/consul:1.20.5
 
-LABEL maintainer="Speculorg Team"
+USER root
 
-ENV CONSUL_FLAGS="-dev -client=0.0.0.0"
+COPY --from=py /usr/local /usr/local
 
-ENTRYPOINT ["sh", "-c", "exec consul agent $CONSUL_FLAGS"]
+ENV PATH="/usr/local/bin:$PATH"
+
+ENTRYPOINT ["python3", "/app/main.py"]

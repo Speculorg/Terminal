@@ -1,9 +1,0 @@
-{
-  "datacenter": "speculorg-dev",
-  "server": true,
-  "bootstrap_expect": 1,
-  "ui": true,
-  "addresses": { "http": "0.0.0.0" },
-  "ports": { "http": 8500, "grpc": 8502 },
-  "enable_central_service_config": true
-}
