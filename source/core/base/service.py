@@ -1,36 +1,21 @@
-# source\core\base\service.py
+# source/core/base/service.py
 
 """
-Speculorg.Terminal Core Service Skeleton
+Speculorg.Terminal - BaseService
 
-Purpose:
-  Provides core service functionality (init, logging, consul registration, healthcheck)
-  for infrastructure and business services within the Speculorg.Terminal platform.
-
-Author: Speculorg Team
-Version: 0.1
+Provides core service functionality (init, logging, consul registration, healthcheck)
+for all services using Pydantic-based centralized settings.
 """
 
-import os
+import logging
+import socket
 import sys
 import time
-import logging
 import requests
-import socket
 
+sys.path.append("/")
 
-ENV_VARS = {
-    "SERVICE_NAME": None,
-    "SERVICE_PORT": None,
-    "CONSUL_HOST": "consul.service",
-    "CONSUL_PORT": 8500,
-    "CONSUL_TIMEOUT": 60,
-    "CONSUL_CHECK_INTERVAL": "10s",
-    "CONSUL_CHECK_TIMEOUT": "3s",
-    "LOG_LEVEL": "INFO",
-    "METRICS_PORT": 9100
-}
-
+from core.base.settings import settings
 
 class BaseService:
     """
@@ -38,28 +23,16 @@ class BaseService:
     """
 
     def __init__(self):
-        self.env = self._load_env_vars()
-        self.service_name = self.env["SERVICE_NAME"]
-        self.service_port = int(self.env["SERVICE_PORT"])
-        self.consul_host = self.env["CONSUL_HOST"]
-        self.consul_port = int(self.env["CONSUL_PORT"])
+        self.env = settings
+        self.service_name = self.env.SERVICE_NAME
+        self.service_port = self.env.SERVICE_PORT
+        self.consul_host = self.env.CONSUL_HOST
+        self.consul_port = self.env.CONSUL_PORT
         self.logger = self._setup_logger()
-
-    def _load_env_vars(self):
-        env = {}
-        for key, default in ENV_VARS.items():
-            val = os.getenv(key)
-            if val is None:
-                if default is None:
-                    print(f"[FATAL] Missing required env var: {key}", file=sys.stderr)
-                    sys.exit(1)
-                val = default
-            env[key] = val
-        return env
 
     def _setup_logger(self):
         logger = logging.getLogger(self.service_name)
-        logger.setLevel(getattr(logging, self.env["LOG_LEVEL"].upper(), logging.INFO))
+        logger.setLevel(getattr(logging, self.env.LOG_LEVEL.upper(), logging.INFO))
         handler = logging.StreamHandler(sys.stdout)
         formatter = logging.Formatter(
             '{"timestamp": "%(asctime)s", "service": "' + self.service_name + '", "level": "%(levelname)s", "message": "%(message)s"}'
@@ -116,17 +89,20 @@ class BaseService:
     def register_in_consul(self):
         self.logger.info("Registering in Consul...")
 
-        if not self._wait_for_port(self.consul_host, self.consul_port, int(self.env["CONSUL_TIMEOUT"])):
+        if not self._wait_for_port(self.consul_host, self.consul_port, self.env.CONSUL_TIMEOUT):
             self.logger.error("Consul not reachable.")
             return
+
+        tags = [t.strip() for t in self.env.SERVICE_TAGS.split(",") if t]
 
         payload = {
             "Name": self.service_name,
             "Port": self.service_port,
+            "Tags": tags,
             "Check": {
                 "TCP": f"{self.service_name}.service:{self.service_port}",
-                "Interval": self.env["CONSUL_CHECK_INTERVAL"],
-                "Timeout": self.env["CONSUL_CHECK_TIMEOUT"]
+                "Interval": self.env.CONSUL_CHECK_INTERVAL,
+                "Timeout": self.env.CONSUL_CHECK_TIMEOUT
             }
         }
 
