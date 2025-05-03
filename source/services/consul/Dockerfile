@@ -1,6 +1,9 @@
 FROM python:3.13-alpine AS py
 
-RUN pip install --no-cache-dir requests
+RUN pip install --no-cache-dir \
+    requests \
+    pydantic \
+    pydantic-settings
 
 FROM hashicorp/consul:1.20.5
 

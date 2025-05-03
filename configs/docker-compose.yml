@@ -61,6 +61,7 @@ services:
       - ../source/services/consul/config:/consul/config:ro
       - ../source/core:/core:ro
       - ../source/services/consul/app:/app:ro
+      - ../configs/.env.${ENV_MODE}:/opt/env/.env:ro
     restart: unless-stopped
     labels:
       - "traefik.enable=true"
