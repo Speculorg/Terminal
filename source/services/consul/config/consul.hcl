@@ -7,6 +7,8 @@ enable_central_service_config = true
 log_level = "INFO"
 enable_syslog = false
 disable_update_check = true
+enable_local_script_checks = true
+client_addr = "0.0.0.0"
 
 
 ui_config {
@@ -16,14 +18,20 @@ ui_config {
 
 addresses {
   http = "0.0.0.0"
-  # dns  = "0.0.0.0"
+  dns  = "0.0.0.0"
 }
 
 
 ports {
   http = 8500
   grpc = 8502
-  # dns  = 8600
+  dns  = 8600
+}
+
+dns_config {
+  enable_truncate = true
+  only_passing = true
+  allow_stale = true
 }
 
 

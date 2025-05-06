@@ -1,4 +1,4 @@
-# source/services/<service>/app/main.py
+# source\services\consul\app\main.py
 
 """
 Speculorg.Terminal - Service Launcher
@@ -20,9 +20,9 @@ from core.base.service import BaseService
 # Set required service identity via environment variables
 # These are read by BaseSettings and must be defined early.
 # ===========================================================
-os.environ["SERVICE_NAME"] = "consul"
+os.environ["SERVICE_NAME"] = "consul.service"
 os.environ["SERVICE_PORT"] = "8500"
-os.environ["SERVICE_TAGS"] = "core,infra,discovery"
+os.environ["SERVICE_TAGS"] = "core,infra,discovery,registry,dns"
 
 
 # ===========================================================
