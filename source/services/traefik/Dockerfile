@@ -11,6 +11,7 @@ FROM traefik:v3.3.4
 # hadolint ignore=DL3002
 USER root
 
+# hadolint ignore=DL3018
 RUN apk add --no-cache curl
 
 COPY --from=py /usr/local /usr/local
