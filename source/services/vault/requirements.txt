@@ -1,0 +1,4 @@
+hvac
+pydantic
+pydantic-settings
+requests
