@@ -34,8 +34,8 @@ class EnvSettings(BaseSettings):
 
     # 🔐 VAULT
     VAULT_ADDR: str = Field(..., description="Vault server address")
-    VAULT_DEV_ROOT_TOKEN_ID: str = Field(..., description="Vault dev root token")
-    VAULT_DEV_LISTEN_ADDRESS: str = Field(..., description="Vault listen address")
+    # VAULT_DEV_ROOT_TOKEN_ID: str = Field(..., description="Vault dev root token")
+    # VAULT_DEV_LISTEN_ADDRESS: str = Field(..., description="Vault listen address")
 
     # 🧊 TRAEFIK
     TRAEFIK_PORT: int = Field(..., description="Traefik UI/API port")
