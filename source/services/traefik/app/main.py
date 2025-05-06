@@ -1,52 +1,33 @@
 # source\services\traefik\app\main.py
 
-"""
-Speculorg.Terminal - Service Launcher
-
-Template main.py for all services using BaseService.
-"""
+# source\services\consul\app\main.py
 
 import sys
 import os
-import time
+import asyncio
+import subprocess
 
 sys.path.append("/")
-
 from core.base.service import BaseService
 
-
-# ===========================================================
-# 🛠 SERVICE INITIALIZATION PARAMETERS
-# Set required service identity via environment variables
-# These are read by BaseSettings and must be defined early.
-# ===========================================================
 os.environ["SERVICE_NAME"] = "traefik.service"
 os.environ["SERVICE_PORT"] = "9000"
 os.environ["SERVICE_TAGS"] = "core,infra,proxy,edge,routing"
 
-
-# ===========================================================
-# 🧠 SERVICE IMPLEMENTATION
-# Derive from BaseService and override run() as needed.
-# ===========================================================
 class Service(BaseService):
-    def run(self):
+    async def run(self):
         self.logger.info("Starting Traefik process...")
+        process = subprocess.Popen(["traefik", "--configFile=/etc/traefik/traefik.yml"])
 
-        import subprocess
+        await self.register_in_consul()
+
         try:
-            process = subprocess.Popen([
-                "traefik", "--configFile=/etc/traefik/traefik.yml"
-            ])
-            process.wait()
-        except Exception as e:
-            self.logger.error(f"Failed to start Traefik: {e}")
+            while True:
+                await asyncio.sleep(60)
+        except KeyboardInterrupt:
+            process.terminate()
             self.stop()
 
-
-# ===========================================================
-# 🚀 ENTRYPOINT
-# ===========================================================
 if __name__ == "__main__":
     svc = Service()
-    svc.start()
+    asyncio.run(svc.start())

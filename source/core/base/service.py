@@ -1,3 +1,6 @@
+# source\core\base\service.py
+
+import asyncio
 import logging
 import socket
 import sys
@@ -5,14 +8,10 @@ import time
 import requests
 
 sys.path.append("/")
-
 from core.base.settings import settings
 
-class BaseService:
-    """
-    BaseService provides core service lifecycle, discovery, logging and monitoring.
-    """
 
+class BaseService:
     def __init__(self):
         self.env = settings
         self.service_name = self.env.SERVICE_NAME
@@ -26,76 +25,64 @@ class BaseService:
         logger.setLevel(getattr(logging, self.env.LOG_LEVEL.upper(), logging.INFO))
         handler = logging.StreamHandler(sys.stdout)
         formatter = logging.Formatter(
-            '{"timestamp": "%(asctime)s", "service": "' + self.service_name + '", "level": "%(levelname)s", "message": "%(message)s"}'
+            '{"timestamp": "%(asctime)s", "service": "' + self.service_name +
+            '", "level": "%(levelname)s", "message": "%(message)s"}'
         )
         handler.setFormatter(formatter)
         if not logger.handlers:
             logger.addHandler(handler)
         return logger
 
-    def initialize(self):
-        self.logger.info("Initializing service...")
-        self.setup_logging()
-        self.setup_vault_connection()
-        self.monitor_metrics()
-        self.register_in_consul()
-        self.healthcheck()
-
-    def start(self):
+    async def start(self):
         self.logger.info("Starting service...")
-        self.initialize()
-        self.run()
+        await self.initialize()
+        await self.run()
 
-    def pause(self):
-        self.logger.info("Service paused (not implemented).")
+    async def initialize(self):
+        self.logger.info("Initializing service...")
+        self._setup_metrics()
+        self._setup_health()
+        self._setup_vault()
+        await asyncio.sleep(0.1)  # симуляция инициализации
 
-    def restart(self):
-        self.logger.info("Service restarting...")
-        self.stop()
-        self.start()
+    async def run(self):
+        self.logger.info("Service is running.")
+        try:
+            while True:
+                await asyncio.sleep(30)
+        except asyncio.CancelledError:
+            self.logger.info("Service cancelled.")
+        finally:
+            self.stop()
 
     def stop(self):
         self.logger.info("Stopping service...")
 
-    def run(self):
-        self.logger.info("Service is running.")
-        try:
-            while True:
-                time.sleep(30)
-        except KeyboardInterrupt:
-            self.stop()
-
-    def setup_logging(self):
-        self.logger.info("Logging initialized.")
-
-    def setup_vault_connection(self):
-        self.logger.info("Vault integration not implemented.")
-
-    def monitor_metrics(self):
+    def _setup_metrics(self):
         self.logger.info("Metrics exporter not implemented.")
 
-    def healthcheck(self):
+    def _setup_health(self):
         self.logger.info("Healthcheck passed.")
 
-    def register_in_consul(self):
-        if self.service_name == "consul.service":
+    def _setup_vault(self):
+        self.logger.info("Vault integration not implemented.")
+
+    async def register_in_consul(self):
+        if self.service_name == "consul":
             self.logger.info("Skipping Consul self-registration.")
             return
 
-        self.logger.info("Registering in Consul...")
-
-        if not self._wait_for_port(self.consul_host, self.consul_port, self.env.CONSUL_TIMEOUT):
-            self.logger.error(f"Consul at {self.consul_host}:{self.consul_port} not reachable within timeout.")
+        self.logger.info("Waiting for Consul...")
+        if not await self._wait_for_port(self.consul_host, self.consul_port, self.env.CONSUL_TIMEOUT):
+            self.logger.error("Consul not reachable.")
             return
-
-        tags = [t.strip() for t in self.env.SERVICE_TAGS.split(",") if t]
 
         payload = {
             "Name": self.service_name,
             "Port": self.service_port,
-            "Tags": tags,
+            "Tags": [t.strip() for t in self.env.SERVICE_TAGS.split(",") if t],
             "Check": {
-                "TCP": f"{self.service_name}.service:{self.service_port}",
+                "TCP": f"{self.service_name}:{self.service_port}",
                 "Interval": self.env.CONSUL_CHECK_INTERVAL,
                 "Timeout": self.env.CONSUL_CHECK_TIMEOUT
             }
@@ -103,37 +90,18 @@ class BaseService:
 
         try:
             url = f"http://{self.consul_host}:{self.consul_port}/v1/agent/service/register"
-            self.logger.debug(f"Consul registration payload: {payload}")
-            response = requests.put(url, json=payload, timeout=5)
-            response.raise_for_status()
+            resp = requests.put(url, json=payload, timeout=5)
+            resp.raise_for_status()
             self.logger.info(f"Registered in Consul: {self.service_name}:{self.service_port}")
-        except Exception as exc:
-            self.logger.error(f"Consul registration failed: {exc}")
-            time.sleep(3)
-            self.logger.debug("Retrying registration after delay...")
+        except Exception as e:
+            self.logger.error(f"Consul registration failed: {e}")
 
-    def _wait_for_port(self, host, port, timeout):
+    async def _wait_for_port(self, host, port, timeout):
         deadline = time.time() + timeout
-        self.logger.debug(f"Waiting for port {host}:{port} (timeout {timeout}s)...")
         while time.time() < deadline:
             try:
                 with socket.create_connection((host, port), timeout=2):
-                    self.logger.debug(f"Port {host}:{port} is now open.")
                     return True
-            except Exception as e:
-                self.logger.debug(f"Port not open yet: {e}")
-                time.sleep(2)
+            except Exception:
+                await asyncio.sleep(1)
         return False
-
-    def handle_request(self, request: dict) -> dict:
-        self.logger.info(f"Handling request: {request}")
-        return {"status": "ok", "data": request}
-
-    def process_task(self, task: dict) -> None:
-        self.logger.info(f"Processing task: {task}")
-
-    def process_event(self, event: dict) -> None:
-        self.logger.info(f"Processing event: {event}")
-
-    def log_event(self, event: dict) -> None:
-        self.logger.info(f"Event log: {event}")

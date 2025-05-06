@@ -1,12 +1,16 @@
 #!/usr/bin/env python3
+
 import os
 import time
 import json
 import sys
 import requests
+import logging
+
 
 VAULT_ADDR = os.getenv("VAULT_ADDR", "http://vault.service:8200")
 VAULT_KEYS_PATH = "/vault/config/.vault_keys.json"
+
 SECRET_DATA = {
     "postgres": {
         "user": os.getenv("POSTGRES_USER"),
@@ -25,14 +29,18 @@ SECRET_DATA = {
     }
 }
 
+# === LOGGING SETUP ===
+SERVICE_NAME = "vault"
+logger = logging.getLogger(SERVICE_NAME)
+logger.setLevel(logging.INFO)
+handler = logging.StreamHandler(sys.stdout)
+if not logger.handlers:
+    logger.addHandler(handler)
 
-def log(msg):
-    print(f"[VAULT-INIT] {msg}", flush=True)
 
-
-def fatal(msg):
-    print(f"[VAULT-INIT] ❌ {msg}", file=sys.stderr, flush=True)
-    sys.exit(1)
+def log(msg): logger.info(msg)
+def warn(msg): logger.warning(msg)
+def fatal(msg): logger.error(msg); sys.exit(1)
 
 
 def wait_for_vault(timeout=60):
@@ -50,6 +58,7 @@ def wait_for_vault(timeout=60):
 
 
 def is_initialized():
+    log("Checking if Vault is initialized ...")
     try:
         res = requests.get(f"{VAULT_ADDR}/v1/sys/init")
         return res.json().get("initialized", False)
@@ -79,17 +88,18 @@ def unseal():
         res = requests.put(f"{VAULT_ADDR}/v1/sys/unseal", json={"key": keys["keys"][0]})
         if res.status_code != 200:
             fatal(f"Unseal failed: {res.status_code} {res.text}")
-        log("Unseal ok.")
+        log("Unseal OK.")
     except Exception as e:
         fatal(f"Unseal error: {e}")
 
 
 def login_root():
+    log("Login root ...")
     try:
         with open(VAULT_KEYS_PATH) as f:
             keys = json.load(f)
-        token = keys["root_token"]
-        return {"X-Vault-Token": token}
+        log("Login root OK.")
+        return {"X-Vault-Token": keys["root_token"]}
     except Exception as e:
         fatal(f"Cannot load root token: {e}")
 
@@ -109,10 +119,10 @@ def mount_secret_if_needed(headers):
 
 
 def put_secrets(headers):
-    print(json.dumps(SECRET_DATA, indent=2), flush=True)
+    log("Putting secrets ...")
     for name, secret in SECRET_DATA.items():
         if not secret or any(v is None for v in secret.values()):
-            log(f"⚠️ Skipping secret {name}, has empty values: {secret}")
+            warn(f"⚠️ Skipping secret {name}, has empty values: {secret}")
             continue
         log(f"Putting secret: {name} ...")
         res = requests.post(f"{VAULT_ADDR}/v1/secret/data/{name}", headers=headers, json={"data": secret})
@@ -125,7 +135,6 @@ def main():
     log("Running Vault initializer...")
     wait_for_vault()
 
-    # Шаг 1: проверка init-флага
     if not os.path.exists(VAULT_KEYS_PATH):
         if not is_initialized():
             init_vault()
@@ -134,20 +143,12 @@ def main():
     else:
         log("Vault already initialized.")
 
-    # Шаг 2: unseal
     unseal()
-
-    # Шаг 3: авторизация
     headers = login_root()
-
-    # Шаг 4: монтирование KV, если требуется
     mount_secret_if_needed(headers)
-
-    # Шаг 5: загрузка секретов
     put_secrets(headers)
 
     log("Vault init complete.")
-
     sys.exit(0)
 
 
