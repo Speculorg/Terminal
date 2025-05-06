@@ -1,12 +1,3 @@
-# source/core/base/service.py
-
-"""
-Speculorg.Terminal - BaseService
-
-Provides core service functionality (init, logging, consul registration, healthcheck)
-for all services using Pydantic-based centralized settings.
-"""
-
 import logging
 import socket
 import sys
@@ -87,10 +78,14 @@ class BaseService:
         self.logger.info("Healthcheck passed.")
 
     def register_in_consul(self):
+        if self.service_name == "consul.service":
+            self.logger.info("Skipping Consul self-registration.")
+            return
+
         self.logger.info("Registering in Consul...")
 
         if not self._wait_for_port(self.consul_host, self.consul_port, self.env.CONSUL_TIMEOUT):
-            self.logger.error("Consul not reachable.")
+            self.logger.error(f"Consul at {self.consul_host}:{self.consul_port} not reachable within timeout.")
             return
 
         tags = [t.strip() for t in self.env.SERVICE_TAGS.split(",") if t]
@@ -108,19 +103,25 @@ class BaseService:
 
         try:
             url = f"http://{self.consul_host}:{self.consul_port}/v1/agent/service/register"
+            self.logger.debug(f"Consul registration payload: {payload}")
             response = requests.put(url, json=payload, timeout=5)
             response.raise_for_status()
             self.logger.info(f"Registered in Consul: {self.service_name}:{self.service_port}")
         except Exception as exc:
             self.logger.error(f"Consul registration failed: {exc}")
+            time.sleep(3)
+            self.logger.debug("Retrying registration after delay...")
 
     def _wait_for_port(self, host, port, timeout):
         deadline = time.time() + timeout
+        self.logger.debug(f"Waiting for port {host}:{port} (timeout {timeout}s)...")
         while time.time() < deadline:
             try:
                 with socket.create_connection((host, port), timeout=2):
+                    self.logger.debug(f"Port {host}:{port} is now open.")
                     return True
-            except Exception:
+            except Exception as e:
+                self.logger.debug(f"Port not open yet: {e}")
                 time.sleep(2)
         return False
 
