@@ -108,6 +108,8 @@ services:
     networks:
       - net_public
       - net_private
+    ports:
+      - "9000:9000"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - ../source/services/traefik/config:/etc/traefik:ro
