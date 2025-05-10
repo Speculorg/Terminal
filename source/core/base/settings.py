@@ -1,4 +1,4 @@
-# source/core/base/settings.py
+# source\core\base\settings.py
 
 """
 Speculorg.Terminal - Centralized Environment Settings

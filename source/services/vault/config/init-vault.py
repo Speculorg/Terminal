@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+# source\services\vault\config\init-vault.py
 
 import os
 import time
@@ -8,7 +8,7 @@ import requests
 import logging
 
 
-VAULT_ADDR = os.getenv("VAULT_ADDR", "http://vault.service:8200")
+VAULT_ADDR = os.getenv("VAULT_ADDR")
 VAULT_KEYS_PATH = "/vault/config/.vault_keys.json"
 
 SECRET_DATA = {
@@ -30,7 +30,7 @@ SECRET_DATA = {
 }
 
 # === LOGGING SETUP ===
-SERVICE_NAME = "vault"
+SERVICE_NAME = "vault-service"
 logger = logging.getLogger(SERVICE_NAME)
 logger.setLevel(logging.INFO)
 handler = logging.StreamHandler(sys.stdout)

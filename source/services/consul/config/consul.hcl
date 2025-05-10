@@ -1,3 +1,5 @@
+# source\services\consul\config\consul.hcl
+
 datacenter = "speculorg-dev"
 node_name = "consul-node-1"
 server = true

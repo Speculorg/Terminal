@@ -1,21 +1,29 @@
-# File: source/services/traefik/traefik.yml
+# source\services\traefik\config\traefik.yml
 
-# Entrypoints define the ports Traefik listens on
 entryPoints:
   web:
-    address: ":9000"          # Dashboard & API
+    address: ":9000"
 
-# Enable and expose the Traefik API & Dashboard
 api:
-  dashboard: true             # Serve the dashboard UI
-  # insecure: true              # Allow access without auth (dev only)
+  dashboard: true
 
-# Configure the Docker provider to discover services automatically
 providers:
   docker:
     endpoint: "unix:///var/run/docker.sock"
-    exposedByDefault: false   # Only route containers labeled with traefik.enable=true
+    exposedByDefault: false
+  consulCatalog:
+    endpoint:
+      address: "consul-service:8500"
+    prefix: "traefik"
+    exposedByDefault: false
 
-# Enable basic logging
+ping:
+  entryPoint: web
+
 log:
   level: INFO
+
+accessLog:
+  bufferingSize: 100
+  filters:
+    statusCodes: ["400-499", "500-599"]

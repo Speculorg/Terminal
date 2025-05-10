@@ -1,335 +1,16 @@
-# Speculorg.Terminal Docker Compose Configuration
-# This file defines the container orchestration for the Speculorg microservices architecture
-# Last updated: 2025.04.18
-
-# Terminal/configs/docker-compose.yml
+# configs\docker-compose.yml
 
 
 ###############################
-#          Services           #
+#            Networks         #
 ###############################
-services:
+networks:
+  net_private:
+    driver: bridge
+    internal: true
+  net_public:
+    driver: bridge
 
-  ############  Edge / Proxy  ############
-  traefik:
-    container_name: traefik.service
-    env_file:
-      - ./.env.${ENV_MODE}
-    build:
-      context: ../source/services/traefik
-    environment:
-      SERVICE_NAME: traefik
-      SERVICE_PORT: 9000
-    command:
-      - "--configFile=/etc/traefik/traefik.yml"
-      - "--api.dashboard=true"
-      - "--providers.docker=true"
-      - "--providers.docker.exposedByDefault=false"
-      - "--entryPoints.web.address=:9000"
-    networks:
-      - net_public
-      - net_private
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock:ro
-      - ../source/services/traefik/config:/etc/traefik:ro
-      - ../source/core:/core:ro
-      - ../source/services/traefik/app:/app:ro
-      - ../configs/.env.${ENV_MODE}:/opt/env/.env:ro
-    depends_on:
-      consul:
-        condition: service_healthy
-      vault:
-        condition: service_healthy
-    restart: unless-stopped
-    labels:
-      - "traefik.enable=true"
-      - "traefik.http.routers.traefik.rule=PathPrefix(`/dashboard`) || PathPrefix(`/api`)"
-      - "traefik.http.routers.traefik.entrypoints=web"
-      - "traefik.http.services.traefik.loadbalancer.server.port=9000"
-    healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:9000/api/rawdata"]
-      interval: 10s
-      timeout: 3s
-      retries: 5
-
-  ############  Core Infrastructure  ############
-  consul:
-    container_name: consul.service
-    env_file:
-      - ./.env.${ENV_MODE}
-    build:
-      context: ../source/services/consul
-    environment:
-      SERVICE_NAME: consul
-      SERVICE_PORT: 8500
-    ports:
-      - "8500:8500"
-      - "8600:8600/udp"
-      - "8600:8600/tcp"
-    networks:
-      - net_private
-    volumes:
-      - consul_data:/consul/data
-      - ../source/services/consul/config:/consul/config:ro
-      - ../source/core:/core:ro
-      - ../source/services/consul/app:/app:ro
-      - ../configs/.env.${ENV_MODE}:/opt/env/.env:ro
-    restart: unless-stopped
-    labels:
-      - "traefik.enable=true"
-      - "traefik.http.routers.consul.rule=Host(`consul.local`)"
-      - "traefik.http.routers.consul.entrypoints=web"
-      - "traefik.http.services.consul.loadbalancer.server.port=8500"
-    healthcheck:
-      test: ["CMD", "curl", "-fsS", "http://localhost:8500/v1/status/leader"]
-      interval: 10s
-      timeout: 3s
-      retries: 5
-
-  vault:
-    container_name: vault.service
-    env_file:
-      - ./.env.${ENV_MODE}
-    build:
-      context: ../source/services/vault
-    cap_add:
-      - IPC_LOCK            # prevent secret data from being swapped
-    networks:
-      - net_private
-    environment:
-      SERVICE_NAME: vault
-      SERVICE_PORT: 8200
-    volumes:
-      - vault_data:/vault/file
-      - ../source/services/vault/config:/vault/config
-      - ../source/core:/core:ro
-      - ../source/services/vault/app:/app:ro
-      - ../configs/.env.${ENV_MODE}:/opt/env/.env:ro
-    depends_on:
-      consul:
-        condition: service_healthy
-    restart:
-      unless-stopped
-    labels:
-      - "traefik.enable=true"
-      - "traefik.http.routers.vault.rule=Host(`vault.local`)"
-      - "traefik.http.routers.vault.entrypoints=web"
-      - "traefik.http.services.vault.loadbalancer.server.port=8200"
-    healthcheck:
-      test: ["CMD", "curl", "-s", "http://localhost:8200/v1/sys/health"]
-      interval: 10s
-      timeout: 3s
-      retries: 5
-
-  database:
-    container_name: database.service
-    env_file:
-      - ./.env.${ENV_MODE}
-    build:
-      context: ../source/services/database
-    environment:
-      SERVICE_NAME: database
-      SERVICE_PORT: 5432
-      POSTGRES_USER: ${POSTGRES_USER:-speculorg}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-speculpwd}
-      POSTGRES_DB: ${POSTGRES_DB:-speculorg}
-    networks:
-      - net_private
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-      - shared_scripts:/opt/scripts:ro
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER"]
-      interval: 10s
-      retries: 5
-
-  redis:
-    container_name: redis.service
-    env_file:
-      - ./.env.${ENV_MODE}
-    build:
-      context: ../source/services/redis
-    environment:
-      SERVICE_NAME: redis
-      SERVICE_PORT: 6379
-    networks:
-      - net_private
-    volumes:
-      - redis_data:/data
-      - shared_scripts:/opt/scripts:ro
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 10s
-      timeout: 3s
-      retries: 5
-
-  rabbitmq:
-    container_name: rabbitmq.service
-    env_file:
-      - ./.env.${ENV_MODE}
-    build:
-      context: ../source/services/rabbitmq
-    environment:
-      SERVICE_NAME: rabbitmq
-      SERVICE_PORT: 5672
-      RABBITMQ_DEFAULT_USER: ${RABBITMQ_DEFAULT_USER:-guest}
-      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_DEFAULT_PASS:-guest}
-    networks:
-      - net_private
-    volumes:
-      - rabbitmq_data:/var/lib/rabbitmq
-      - shared_scripts:/opt/scripts:ro
-    restart: unless-stopped
-    labels:
-      - "traefik.enable=true"
-      - "traefik.http.routers.rabbitmq.rule=Host(`rabbitmq.local`)"
-      - "traefik.http.routers.rabbitmq.entrypoints=web"
-      - "traefik.http.services.rabbitmq.loadbalancer.server.port=15672"
-    healthcheck:
-      test: ["CMD", "rabbitmq-diagnostics", "status", "-q"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-
-  keycloak:
-    container_name: keycloak.service
-    env_file:
-      - ./.env.${ENV_MODE}
-    environment:
-      SERVICE_NAME: keycloak
-      SERVICE_PORT: 8080
-      KC_DB: postgres
-      KC_DB_URL_HOST: database.service
-      KC_DB_URL_PORT: 5432
-      KC_DB_URL_DATABASE: speculorg
-      KC_DB_USERNAME: speculorg
-      KC_DB_PASSWORD: speculpwd
-      KEYCLOAK_ADMIN: admin
-      KEYCLOAK_ADMIN_PASSWORD: admin
-    build:
-      context: ../source/services/keycloak
-    depends_on:
-      - database
-    networks:
-      - net_private
-    labels:
-      - "traefik.enable=true"
-      - "traefik.http.routers.keycloak.rule=Host(`keycloak.local`)"
-      - "traefik.http.routers.keycloak.entrypoints=web"
-      - "traefik.http.services.keycloak.loadbalancer.server.port=8080"
-    volumes:
-      - shared_scripts:/opt/scripts:ro
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "curl", "-fsS", "http://localhost:8080/health/live"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-
-  ############  Microservices  ############
-  infrastructure:
-    container_name: infrastructure.service
-    env_file:
-      - ./.env.${ENV_MODE}
-    build:
-      context: ../source/services/infrastructure
-    ports:
-      - "9001:9001"        # Infrastructure API
-    networks:
-      - net_private
-    depends_on:
-      - consul
-      - vault
-      - database
-      - redis
-      - rabbitmq
-    restart: unless-stopped
-
-  monitoring:
-    container_name: monitoring.service
-    env_file:
-      - ./.env.${ENV_MODE}
-    build:
-      context: ../source/services/monitoring
-    ports:
-      # Grafana доступен через Traefik, но оставим порт наружу для отладки при необходимости
-      - "9090:9090"   # Prometheus
-      - "3000:3000"   # Grafana
-    networks:
-      - net_private
-    volumes:
-      - grafana_data:/var/lib/grafana
-      - prometheus_data:/prom_data
-    depends_on:
-      - infrastructure
-    restart: unless-stopped
-
-  logging:
-    container_name: logging.service
-    env_file:
-      - ./.env.${ENV_MODE}
-    build:
-      context: ../source/services/logging
-    environment:
-      discovery.type: single-node
-    ports:
-      - "9200:9200"        # Elasticsearch
-      - "5601:5601"        # Kibana (also routed via Traefik)
-    networks:
-      - net_private
-    volumes:
-      - elasticsearch_data:/usr/share/elasticsearch/data
-    depends_on:
-      - infrastructure
-    restart: unless-stopped
-
-  security:
-    container_name: security.service
-    env_file:
-      - ./.env.${ENV_MODE}
-    build:
-      context: ../source/services/security
-    ports:
-      - "9002:9002"        # Security API
-    networks:
-      - net_private
-    depends_on:
-      - keycloak
-      - infrastructure
-    restart: unless-stopped
-
-  management:
-    container_name: management.service
-    env_file:
-      - ./.env.${ENV_MODE}
-    build:
-      context: ../source/services/management
-    ports:
-      - "9003:9003"        # Management API
-    networks:
-      - net_private
-    depends_on:
-      - security
-      - logging
-      - infrastructure
-    restart: unless-stopped
-
-  integration:
-    container_name: integration.service
-    env_file:
-      - ./.env.${ENV_MODE}
-    build:
-      context: ../source/services/integration
-    ports:
-      - "9004:9004"        # Integration API
-    networks:
-      - net_private
-    depends_on:
-      - rabbitmq
-      - infrastructure
-    restart: unless-stopped
 
 ###############################
 #          Volumes            #
@@ -349,61 +30,389 @@ volumes:
       o: bind
       device: ../volumes/vault_data
 
-  postgres_data:
-    driver: local
-    driver_opts:
-      type: none
-      o: bind
-      device: ../volumes/postgres_data
 
-  redis_data:
-    driver: local
-    driver_opts:
-      type: none
-      o: bind
-      device: ../volumes/redis_data
+  # postgres_data:
+  #   driver: local
+  #   driver_opts:
+  #     type: none
+  #     o: bind
+  #     device: ../volumes/postgres_data
 
-  rabbitmq_data:
-    driver: local
-    driver_opts:
-      type: none
-      o: bind
-      device: ../volumes/rabbitmq_data
+  # redis_data:
+  #   driver: local
+  #   driver_opts:
+  #     type: none
+  #     o: bind
+  #     device: ../volumes/redis_data
 
-  elasticsearch_data:
-    driver: local
-    driver_opts:
-      type: none
-      o: bind
-      device: ../volumes/elasticsearch_data
+  # rabbitmq_data:
+  #   driver: local
+  #   driver_opts:
+  #     type: none
+  #     o: bind
+  #     device: ../volumes/rabbitmq_data
 
-  grafana_data:
-    driver: local
-    driver_opts:
-      type: none
-      o: bind
-      device: ../volumes/grafana_data
+  # elasticsearch_data:
+  #   driver: local
+  #   driver_opts:
+  #     type: none
+  #     o: bind
+  #     device: ../volumes/elasticsearch_data
 
-  prometheus_data:
-    driver: local
-    driver_opts:
-      type: none
-      o: bind
-      device: ../volumes/prometheus_data
+  # grafana_data:
+  #   driver: local
+  #   driver_opts:
+  #     type: none
+  #     o: bind
+  #     device: ../volumes/grafana_data
 
-  shared_scripts:
-    driver: local
-    driver_opts:
-      type: none
-      o: bind
-      device: ../volumes/shared_scripts
+  # prometheus_data:
+  #   driver: local
+  #   driver_opts:
+  #     type: none
+  #     o: bind
+  #     device: ../volumes/prometheus_data
+
+  # shared_scripts:
+  #   driver: local
+  #   driver_opts:
+  #     type: none
+  #     o: bind
+  #     device: ../volumes/shared_scripts
+
 
 ###############################
-#            Networks         #
+#          Services           #
 ###############################
-networks:
-  net_private:
-    driver: bridge
-    internal: true
-  net_public:
-    driver: bridge
+services:
+
+  ############  Edge / Proxy  ############
+  traefik:
+    container_name: traefik-service
+    hostname: traefik-service
+    env_file:
+      - ./.env.${ENV_MODE}
+    build:
+      context: ../source/services/traefik
+    environment:
+      SERVICE_NAME: traefik-service
+      SERVICE_PORT: 9000
+    command:
+      - "--configFile=/etc/traefik/traefik.yml"
+      - "--api.dashboard=true"
+      - "--providers.docker=true"
+      - "--providers.docker.exposedByDefault=false"
+      - "--entryPoints.web.address=:9000"
+      - "--ping=true"
+      - "--ping.entryPoint=web"
+    networks:
+      - net_public
+      - net_private
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ../source/services/traefik/config:/etc/traefik:ro
+      - ../source/core:/core:ro
+      - ../source/services/traefik/app:/app:ro
+      - ../configs/.env.${ENV_MODE}:/opt/env/.env:ro
+    depends_on:
+      consul:
+        condition: service_healthy
+      vault:
+        condition: service_healthy
+    restart: unless-stopped
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.traefik.rule=PathPrefix(`/dashboard`) || PathPrefix(`/api`)"
+      - "traefik.http.routers.traefik.entrypoints=web"
+      - "traefik.http.routers.traefik.service=api@internal"
+      - "traefik.http.services.traefik.loadbalancer.server.port=9000"
+    healthcheck:
+      test: ["CMD", "curl", "-s", "http://traefik-service:9000/api/rawdata"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  ############  Core Infrastructure  ############
+  consul:
+    container_name: consul-service
+    hostname: consul-service
+    env_file:
+      - ./.env.${ENV_MODE}
+    build:
+      context: ../source/services/consul
+    environment:
+      SERVICE_NAME: consul-service
+      SERVICE_PORT: 8500
+    ports:
+      - "8500:8500"
+      - "8600:8600/udp"
+      - "8600:8600/tcp"
+    networks:
+      - net_private
+    volumes:
+      - consul_data:/consul/data
+      - ../source/services/consul/config:/consul/config:ro
+      - ../source/core:/core:ro
+      - ../source/services/consul/app:/app:ro
+      - ../configs/.env.${ENV_MODE}:/opt/env/.env:ro
+    restart: unless-stopped
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.consul.rule=PathPrefix(`/consul`)"
+      - "traefik.http.routers.consul.entrypoints=web"
+      - "traefik.http.services.consul.loadbalancer.server.port=8500"
+    healthcheck:
+      test: ["CMD", "curl", "-s", "http://consul-service:8500/v1/status/leader"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  vault:
+    container_name: vault-service
+    hostname: vault-service
+    env_file:
+      - ./.env.${ENV_MODE}
+    build:
+      context: ../source/services/vault
+    cap_add:
+      - IPC_LOCK
+    networks:
+      - net_private
+    environment:
+      SERVICE_NAME: vault-service
+      SERVICE_PORT: 8200
+    volumes:
+      - vault_data:/vault/file
+      - ../source/services/vault/config:/vault/config
+      - ../source/core:/core:ro
+      - ../source/services/vault/app:/app:ro
+      - ../configs/.env.${ENV_MODE}:/opt/env/.env:ro
+    depends_on:
+      consul:
+        condition: service_healthy
+    restart:
+      unless-stopped
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.vault.rule=PathPrefix(`/vault`)"
+      - "traefik.http.routers.vault.entrypoints=web"
+      - "traefik.http.services.vault.loadbalancer.server.port=8200"
+    healthcheck:
+      test: ["CMD", "curl", "-s", "http://vault-service:8200/v1/sys/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+
+
+
+  # database:
+  #   container_name: database.service
+  #   env_file:
+  #     - ./.env.${ENV_MODE}
+  #   build:
+  #     context: ../source/services/database
+  #   environment:
+  #     SERVICE_NAME: database
+  #     SERVICE_PORT: 5432
+  #     POSTGRES_USER: ${POSTGRES_USER:-speculorg}
+  #     POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-speculpwd}
+  #     POSTGRES_DB: ${POSTGRES_DB:-speculorg}
+  #   networks:
+  #     - net_private
+  #   volumes:
+  #     - postgres_data:/var/lib/postgresql/data
+  #     - shared_scripts:/opt/scripts:ro
+  #   restart: unless-stopped
+  #   healthcheck:
+  #     test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER"]
+  #     interval: 10s
+  #     retries: 5
+
+  # redis:
+  #   container_name: redis.service
+  #   env_file:
+  #     - ./.env.${ENV_MODE}
+  #   build:
+  #     context: ../source/services/redis
+  #   environment:
+  #     SERVICE_NAME: redis
+  #     SERVICE_PORT: 6379
+  #   networks:
+  #     - net_private
+  #   volumes:
+  #     - redis_data:/data
+  #     - shared_scripts:/opt/scripts:ro
+  #   restart: unless-stopped
+  #   healthcheck:
+  #     test: ["CMD", "redis-cli", "ping"]
+  #     interval: 10s
+  #     timeout: 3s
+  #     retries: 5
+
+  # rabbitmq:
+  #   container_name: rabbitmq.service
+  #   env_file:
+  #     - ./.env.${ENV_MODE}
+  #   build:
+  #     context: ../source/services/rabbitmq
+  #   environment:
+  #     SERVICE_NAME: rabbitmq
+  #     SERVICE_PORT: 5672
+  #     RABBITMQ_DEFAULT_USER: ${RABBITMQ_DEFAULT_USER:-guest}
+  #     RABBITMQ_DEFAULT_PASS: ${RABBITMQ_DEFAULT_PASS:-guest}
+  #   networks:
+  #     - net_private
+  #   volumes:
+  #     - rabbitmq_data:/var/lib/rabbitmq
+  #     - shared_scripts:/opt/scripts:ro
+  #   restart: unless-stopped
+  #   labels:
+  #     - "traefik.enable=true"
+  #     - "traefik.http.routers.rabbitmq.rule=Host(`rabbitmq.local`)"
+  #     - "traefik.http.routers.rabbitmq.entrypoints=web"
+  #     - "traefik.http.services.rabbitmq.loadbalancer.server.port=15672"
+  #   healthcheck:
+  #     test: ["CMD", "rabbitmq-diagnostics", "status", "-q"]
+  #     interval: 10s
+  #     timeout: 5s
+  #     retries: 5
+
+  # keycloak:
+  #   container_name: keycloak.service
+  #   env_file:
+  #     - ./.env.${ENV_MODE}
+  #   environment:
+  #     SERVICE_NAME: keycloak
+  #     SERVICE_PORT: 8080
+  #     KC_DB: postgres
+  #     KC_DB_URL_HOST: database.service
+  #     KC_DB_URL_PORT: 5432
+  #     KC_DB_URL_DATABASE: speculorg
+  #     KC_DB_USERNAME: speculorg
+  #     KC_DB_PASSWORD: speculpwd
+  #     KEYCLOAK_ADMIN: admin
+  #     KEYCLOAK_ADMIN_PASSWORD: admin
+  #   build:
+  #     context: ../source/services/keycloak
+  #   depends_on:
+  #     - database
+  #   networks:
+  #     - net_private
+  #   labels:
+  #     - "traefik.enable=true"
+  #     - "traefik.http.routers.keycloak.rule=Host(`keycloak.local`)"
+  #     - "traefik.http.routers.keycloak.entrypoints=web"
+  #     - "traefik.http.services.keycloak.loadbalancer.server.port=8080"
+  #   volumes:
+  #     - shared_scripts:/opt/scripts:ro
+  #   restart: unless-stopped
+  #   healthcheck:
+  #     test: ["CMD", "curl", "-fsS", "http://localhost:8080/health/live"]
+  #     interval: 10s
+  #     timeout: 5s
+  #     retries: 5
+
+  # ############  Microservices  ############
+  # infrastructure:
+  #   container_name: infrastructure.service
+  #   env_file:
+  #     - ./.env.${ENV_MODE}
+  #   build:
+  #     context: ../source/services/infrastructure
+  #   ports:
+  #     - "9001:9001"        # Infrastructure API
+  #   networks:
+  #     - net_private
+  #   depends_on:
+  #     - consul
+  #     - vault
+  #     - database
+  #     - redis
+  #     - rabbitmq
+  #   restart: unless-stopped
+
+  # monitoring:
+  #   container_name: monitoring.service
+  #   env_file:
+  #     - ./.env.${ENV_MODE}
+  #   build:
+  #     context: ../source/services/monitoring
+  #   ports:
+  #     # Grafana доступен через Traefik, но оставим порт наружу для отладки при необходимости
+  #     - "9090:9090"   # Prometheus
+  #     - "3000:3000"   # Grafana
+  #   networks:
+  #     - net_private
+  #   volumes:
+  #     - grafana_data:/var/lib/grafana
+  #     - prometheus_data:/prom_data
+  #   depends_on:
+  #     - infrastructure
+  #   restart: unless-stopped
+
+  # logging:
+  #   container_name: logging.service
+  #   env_file:
+  #     - ./.env.${ENV_MODE}
+  #   build:
+  #     context: ../source/services/logging
+  #   environment:
+  #     discovery.type: single-node
+  #   ports:
+  #     - "9200:9200"        # Elasticsearch
+  #     - "5601:5601"        # Kibana (also routed via Traefik)
+  #   networks:
+  #     - net_private
+  #   volumes:
+  #     - elasticsearch_data:/usr/share/elasticsearch/data
+  #   depends_on:
+  #     - infrastructure
+  #   restart: unless-stopped
+
+  # security:
+  #   container_name: security.service
+  #   env_file:
+  #     - ./.env.${ENV_MODE}
+  #   build:
+  #     context: ../source/services/security
+  #   ports:
+  #     - "9002:9002"        # Security API
+  #   networks:
+  #     - net_private
+  #   depends_on:
+  #     - keycloak
+  #     - infrastructure
+  #   restart: unless-stopped
+
+  # management:
+  #   container_name: management.service
+  #   env_file:
+  #     - ./.env.${ENV_MODE}
+  #   build:
+  #     context: ../source/services/management
+  #   ports:
+  #     - "9003:9003"        # Management API
+  #   networks:
+  #     - net_private
+  #   depends_on:
+  #     - security
+  #     - logging
+  #     - infrastructure
+  #   restart: unless-stopped
+
+  # integration:
+  #   container_name: integration.service
+  #   env_file:
+  #     - ./.env.${ENV_MODE}
+  #   build:
+  #     context: ../source/services/integration
+  #   ports:
+  #     - "9004:9004"        # Integration API
+  #   networks:
+  #     - net_private
+  #   depends_on:
+  #     - rabbitmq
+  #     - infrastructure
+  #   restart: unless-stopped
+

@@ -68,7 +68,7 @@ class BaseService:
         self.logger.info("Vault integration not implemented.")
 
     async def register_in_consul(self):
-        if self.service_name == "consul":
+        if self.service_name == "consul-service":
             self.logger.info("Skipping Consul self-registration.")
             return
 
