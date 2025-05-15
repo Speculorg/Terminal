@@ -129,10 +129,11 @@ services:
       - "traefik.http.routers.traefik.service=api@internal"
       - "traefik.http.services.traefik.loadbalancer.server.port=9000"
     healthcheck:
-      test: ["CMD", "curl", "-s", "http://traefik-service:9000/api/rawdata"]
-      interval: 10s
-      timeout: 3s
-      retries: 5
+      test: ["CMD", "curl", "-fsS", "--connect-timeout", "2", "http://localhost:9099/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 25s
 
   ############  Core Infrastructure  ############
   consul:
@@ -164,10 +165,11 @@ services:
       - "traefik.http.routers.consul.entrypoints=web"
       - "traefik.http.services.consul.loadbalancer.server.port=8500"
     healthcheck:
-      test: ["CMD", "curl", "-s", "http://consul-service:8500/v1/status/leader"]
-      interval: 10s
-      timeout: 3s
-      retries: 5
+      test: ["CMD", "curl", "-fsS", "--connect-timeout", "2", "http://localhost:9099/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 55s
 
   vault:
     container_name: vault-service
@@ -200,13 +202,15 @@ services:
       - "traefik.http.routers.vault.entrypoints=web"
       - "traefik.http.services.vault.loadbalancer.server.port=8200"
     healthcheck:
-      test: ["CMD", "curl", "-s", "http://vault-service:8200/v1/sys/health"]
-      interval: 10s
-      timeout: 3s
-      retries: 5
+      test: ["CMD", "curl", "-fsS", "--connect-timeout", "2", "http://localhost:9099/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 25s
 
 
 
+      
 
   # database:
   #   container_name: database.service

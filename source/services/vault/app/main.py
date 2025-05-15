@@ -10,7 +10,7 @@ from core.base.service import BaseService
 
 os.environ["SERVICE_NAME"] = "vault-service"
 os.environ["SERVICE_PORT"] = "8200"
-os.environ["SERVICE_TAGS"] = "core,infra,proxy,edge,routing"
+os.environ["SERVICE_TAGS"] = "core,infra,secrets"
 
 
 class Service(BaseService):
@@ -33,10 +33,11 @@ class Service(BaseService):
         await self.register_in_consul()
 
         if process.poll() is not None:
-            self.logger.error("Vault exited prematurely.")
+            self.logger.error("Vault startup error.")
             self.stop()
             return
 
+        self.healthy = True
         self.logger.info("Vault service is running.")
         while True:
             await asyncio.sleep(60)

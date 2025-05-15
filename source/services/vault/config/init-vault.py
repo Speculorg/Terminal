@@ -48,13 +48,33 @@ def wait_for_vault(timeout=60):
     for _ in range(timeout):
         try:
             res = requests.get(f"{VAULT_ADDR}/v1/sys/health", timeout=2)
-            if res.status_code in (200, 429, 501, 503):
-                log(f"Vault status: {res.status_code}")
+            if res.status_code == 200:
+                # Vault initialized, unsealed, ready
+                log("Vault is unsealed and active.")
                 return
-        except Exception:
-            pass
+            elif res.status_code == 503:
+                # Vault is sealed but initialized
+                body = res.json()
+                if body.get("initialized") and body.get("sealed"):
+                    log("Vault is sealed but initialized.")
+                    return
+                elif not body.get("initialized"):
+                    log("Vault is not yet initialized.")
+                    return
+                else:
+                    log(f"Vault 503 response: {body}")
+            elif res.status_code == 429:
+                log("Vault is unsealed and active, but in standby (429).")
+                return
+            elif res.status_code == 501:
+                log("Vault not initialized (501).")
+                return
+            else:
+                log(f"Unexpected status: {res.status_code}")
+        except Exception as e:
+            warn(f"Vault not reachable yet: {e}")
         time.sleep(1)
-    fatal("Vault not responding")
+    fatal("Vault not responding after timeout.")
 
 
 def is_initialized():

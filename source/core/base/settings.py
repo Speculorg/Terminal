@@ -23,6 +23,7 @@ class EnvSettings(BaseSettings):
     ENV_MODE: str = Field(..., description="Environment mode (develop/test/prod)")
     LOG_LEVEL: str = Field("INFO", description="Logging level (e.g. INFO, DEBUG)")
     PYTHONUNBUFFERED: int = Field(1, description="Unbuffered stdout")
+    HEALTHCHECK_PORT: int = Field(9099, description="Health check port")
 
     # 🧭 CONSUL
     CONSUL_HOST: str = Field(..., description="Consul agent host")

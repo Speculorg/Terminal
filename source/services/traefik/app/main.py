@@ -19,12 +19,15 @@ class Service(BaseService):
 
         await self.register_in_consul()
 
-        try:
-            while True:
-                await asyncio.sleep(60)
-        except KeyboardInterrupt:
-            process.terminate()
+        if process.poll() is not None:
+            self.logger.error("Traefik startup error.")
             self.stop()
+            return
+
+        self.healthy = True
+        self.logger.info("Traefik service is running.")
+        while True:
+            await asyncio.sleep(60)
 
 if __name__ == "__main__":
     svc = Service()

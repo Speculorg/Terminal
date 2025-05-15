@@ -6,19 +6,25 @@ import socket
 import sys
 import time
 import requests
+from datetime import datetime, timezone
+from aiohttp import web
 
 sys.path.append("/")
 from core.base.settings import settings
-
 
 class BaseService:
     def __init__(self):
         self.env = settings
         self.service_name = self.env.SERVICE_NAME
-        self.service_port = self.env.SERVICE_PORT
+        self.service_port = int(self.env.SERVICE_PORT)
+        self.health_port = int(self.env.HEALTHCHECK_PORT)
         self.consul_host = self.env.CONSUL_HOST
         self.consul_port = self.env.CONSUL_PORT
         self.logger = self._setup_logger()
+
+        self.healthy = False
+        self.last_heartbeat = datetime.now(timezone.utc)
+        self._health_runner = None
 
     def _setup_logger(self):
         logger = logging.getLogger(self.service_name)
@@ -41,14 +47,15 @@ class BaseService:
     async def initialize(self):
         self.logger.info("Initializing service...")
         self._setup_metrics()
-        self._setup_health()
+        await self._setup_health()
         self._setup_vault()
-        await asyncio.sleep(0.1)  # симуляция инициализации
+        await asyncio.sleep(0.1)
 
     async def run(self):
         self.logger.info("Service is running.")
         try:
             while True:
+                self.last_heartbeat = datetime.now(timezone.utc)
                 await asyncio.sleep(30)
         except asyncio.CancelledError:
             self.logger.info("Service cancelled.")
@@ -61,11 +68,30 @@ class BaseService:
     def _setup_metrics(self):
         self.logger.info("Metrics exporter not implemented.")
 
-    def _setup_health(self):
-        self.logger.info("Healthcheck passed.")
-
     def _setup_vault(self):
         self.logger.info("Vault integration not implemented.")
+
+    async def _setup_health(self):
+        async def handle_health(request):
+            now = datetime.utcnow().isoformat()
+            status = {
+                "status": "ok" if self.healthy else "unhealthy",
+                "service": self.service_name,
+                "port": self.health_port,
+                "last_heartbeat": self.last_heartbeat.isoformat(),
+                "timestamp": now
+            }
+            return web.json_response(status, status=200 if self.healthy else 503)
+
+        app = web.Application()
+        app.router.add_get("/health", handle_health)
+
+        self._health_runner = web.AppRunner(app)
+        await self._health_runner.setup()
+        site = web.TCPSite(self._health_runner, "0.0.0.0", self.health_port)
+        await site.start()
+
+        self.logger.info(f"Healthcheck server started at http://0.0.0.0:{self.health_port}/health")
 
     async def register_in_consul(self):
         if self.service_name == "consul-service":
@@ -82,7 +108,7 @@ class BaseService:
             "Port": self.service_port,
             "Tags": [t.strip() for t in self.env.SERVICE_TAGS.split(",") if t],
             "Check": {
-                "TCP": f"{self.service_name}:{self.service_port}",
+                "HTTP": f"http://{self.service_name}:{self.health_port}/health",
                 "Interval": self.env.CONSUL_CHECK_INTERVAL,
                 "Timeout": self.env.CONSUL_CHECK_TIMEOUT
             }

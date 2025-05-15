@@ -10,7 +10,7 @@ from core.base.service import BaseService
 
 os.environ["SERVICE_NAME"] = "consul-service"
 os.environ["SERVICE_PORT"] = "8500"
-os.environ["SERVICE_TAGS"] = "core,infra,discovery,dns"
+os.environ["SERVICE_TAGS"] = "core,infra,dns,discovery"
 
 class Service(BaseService):
     async def run(self):
@@ -19,12 +19,15 @@ class Service(BaseService):
 
         await self.register_in_consul()
 
-        try:
-            while True:
-                await asyncio.sleep(60)
-        except KeyboardInterrupt:
-            process.terminate()
+        if process.poll() is not None:
+            self.logger.error("Consul startup error.")
             self.stop()
+            return
+
+        self.healthy = True
+        self.logger.info("Consul service is running.")
+        while True:
+            await asyncio.sleep(60)
 
 if __name__ == "__main__":
     svc = Service()
