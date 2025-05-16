@@ -97,6 +97,7 @@ services:
     environment:
       SERVICE_NAME: traefik-service
       SERVICE_PORT: 9000
+      HEALTHCHECK_PORT: ${HEALTHCHECK_PORT}
     command:
       - "--configFile=/etc/traefik/traefik.yml"
       - "--api.dashboard=true"
@@ -129,7 +130,7 @@ services:
       - "traefik.http.routers.traefik.service=api@internal"
       - "traefik.http.services.traefik.loadbalancer.server.port=9000"
     healthcheck:
-      test: ["CMD", "curl", "-fsS", "--connect-timeout", "2", "http://localhost:9099/health"]
+      test: ["CMD-SHELL", "curl -fsS --connect-timeout 2 http://localhost:${HEALTHCHECK_PORT}/health"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -146,6 +147,7 @@ services:
     environment:
       SERVICE_NAME: consul-service
       SERVICE_PORT: 8500
+      HEALTHCHECK_PORT: ${HEALTHCHECK_PORT}
     ports:
       - "8500:8500"
       - "8600:8600/udp"
@@ -165,7 +167,7 @@ services:
       - "traefik.http.routers.consul.entrypoints=web"
       - "traefik.http.services.consul.loadbalancer.server.port=8500"
     healthcheck:
-      test: ["CMD", "curl", "-fsS", "--connect-timeout", "2", "http://localhost:9099/health"]
+      test: ["CMD-SHELL", "curl -fsS --connect-timeout 2 http://localhost:${HEALTHCHECK_PORT}/health"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -185,6 +187,7 @@ services:
     environment:
       SERVICE_NAME: vault-service
       SERVICE_PORT: 8200
+      HEALTHCHECK_PORT: ${HEALTHCHECK_PORT}
     volumes:
       - vault_data:/vault/file
       - ../source/services/vault/config:/vault/config
@@ -202,7 +205,7 @@ services:
       - "traefik.http.routers.vault.entrypoints=web"
       - "traefik.http.services.vault.loadbalancer.server.port=8200"
     healthcheck:
-      test: ["CMD", "curl", "-fsS", "--connect-timeout", "2", "http://localhost:9099/health"]
+      test: ["CMD-SHELL", "curl -fsS --connect-timeout 2 http://localhost:${HEALTHCHECK_PORT}/health"]
       interval: 30s
       timeout: 10s
       retries: 3
