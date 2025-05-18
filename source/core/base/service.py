@@ -1,4 +1,4 @@
-# source\core\base\service.py
+# source/core/base/service.py
 
 import asyncio
 import logging
@@ -6,6 +6,7 @@ import socket
 import sys
 import time
 import requests
+import signal
 from datetime import datetime, timezone
 from aiohttp import web
 
@@ -26,6 +27,10 @@ class BaseService:
         self.last_heartbeat = datetime.now(timezone.utc)
         self._health_runner = None
 
+        self._shutdown_event = asyncio.Event()
+        self._main_task = None
+        self._subprocess = None
+
     def _setup_logger(self):
         logger = logging.getLogger(self.service_name)
         logger.setLevel(getattr(logging, self.env.LOG_LEVEL.upper(), logging.INFO))
@@ -41,8 +46,16 @@ class BaseService:
 
     async def start(self):
         self.logger.info("Starting service...")
+        # Setup signal handlers
+        self._setup_signal_handlers()
         await self.initialize()
-        await self.run()
+        # main run loop is scheduled as a task, to allow graceful shutdown
+        self._main_task = asyncio.create_task(self.run())
+        await self._shutdown_event.wait()
+        self.logger.info("Shutdown event triggered. Waiting for main task to finish...")
+        if self._main_task:
+            await self._main_task
+        self.logger.info("Service stopped.")
 
     async def initialize(self):
         self.logger.info("Initializing service...")
@@ -54,16 +67,31 @@ class BaseService:
     async def run(self):
         self.logger.info("Service is running.")
         try:
-            while True:
+            while not self._shutdown_event.is_set():
                 self.last_heartbeat = datetime.now(timezone.utc)
                 await asyncio.sleep(30)
         except asyncio.CancelledError:
             self.logger.info("Service cancelled.")
         finally:
-            self.stop()
+            await self.stop()
 
-    def stop(self):
+    async def stop(self):
         self.logger.info("Stopping service...")
+        # Stop healthcheck server
+        if self._health_runner:
+            await self._health_runner.cleanup()
+            self.logger.info("Healthcheck server stopped.")
+        # Stop any subprocess if exists
+        if self._subprocess and self._subprocess.poll() is None:
+            self.logger.info("Terminating subprocess...")
+            self._subprocess.terminate()
+            try:
+                self._subprocess.wait(timeout=10)
+                self.logger.info("Subprocess terminated gracefully.")
+            except Exception:
+                self.logger.warning("Subprocess did not terminate in time, killing...")
+                self._subprocess.kill()
+        self.healthy = False
 
     def _setup_metrics(self):
         self.logger.info("Metrics exporter not implemented.")
@@ -92,6 +120,21 @@ class BaseService:
         await site.start()
 
         self.logger.info(f"Healthcheck server started at http://0.0.0.0:{self.health_port}/health")
+
+    def _setup_signal_handlers(self):
+        # Register handlers for SIGTERM, SIGINT for graceful shutdown
+        try:
+            loop = asyncio.get_event_loop()
+            loop.add_signal_handler(signal.SIGTERM, lambda: asyncio.create_task(self.shutdown("SIGTERM")))
+            loop.add_signal_handler(signal.SIGINT, lambda: asyncio.create_task(self.shutdown("SIGINT")))
+            self.logger.info("Signal handlers set for SIGTERM/SIGINT.")
+        except NotImplementedError:
+            # Windows compatibility: signals not supported in ProactorEventLoop
+            self.logger.warning("Signal handlers not supported on this platform.")
+
+    async def shutdown(self, signame):
+        self.logger.info(f"Received {signame}. Initiating shutdown...")
+        self._shutdown_event.set()
 
     async def register_in_consul(self):
         if self.service_name == "consul-service":
@@ -131,3 +174,7 @@ class BaseService:
             except Exception:
                 await asyncio.sleep(1)
         return False
+
+    # New: For main.py, so subprocess can be tracked and terminated
+    def set_subprocess(self, process):
+        self._subprocess = process
