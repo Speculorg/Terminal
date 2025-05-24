@@ -9,7 +9,7 @@ sys.path.append("/")
 from core.base.service import BaseService
 
 os.environ["SERVICE_NAME"] = "traefik-service"
-os.environ["SERVICE_PORT"] = "9000"
+os.environ["SERVICE_PORT"] = "443"
 os.environ["SERVICE_TAGS"] = "core,infra,proxy,edge,routing"
 
 class Service(BaseService):

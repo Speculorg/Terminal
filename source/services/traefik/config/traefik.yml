@@ -2,10 +2,13 @@
 
 entryPoints:
   web:
-    address: ":9000"
+    address: ":80"
+  websecure:
+    address: ":443"
 
 api:
   dashboard: true
+  insecure: false
 
 providers:
   docker:
