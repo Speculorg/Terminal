@@ -8,7 +8,7 @@ import subprocess
 sys.path.append("/")
 from core.base.service import BaseService
 
-os.environ["SERVICE_NAME"] = "vault-service"
+os.environ["SERVICE_NAME"] = "vault"
 os.environ["SERVICE_PORT"] = "8200"
 os.environ["SERVICE_TAGS"] = "core,infra,secrets"
 

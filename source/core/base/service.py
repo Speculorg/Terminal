@@ -137,7 +137,7 @@ class BaseService:
         self._shutdown_event.set()
 
     async def register_in_consul(self):
-        if self.service_name == "consul-service":
+        if self.service_name == "consul":
             self.logger.info("Skipping Consul self-registration.")
             return
 

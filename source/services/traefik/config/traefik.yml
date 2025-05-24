@@ -16,7 +16,7 @@ providers:
     exposedByDefault: false
   consulCatalog:
     endpoint:
-      address: "consul-service:8500"
+      address: "consul:8500"
     prefix: "traefik"
     exposedByDefault: false
 

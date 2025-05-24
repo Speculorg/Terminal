@@ -3,7 +3,7 @@
 ui = true
 disable_mlock = true
 log_level = "info"
-api_addr = "http://vault-service:8200"
+api_addr = "http://vault:8200"
 
 storage "file" {
   path = "/vault/file"

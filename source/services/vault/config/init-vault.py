@@ -30,8 +30,7 @@ SECRET_DATA = {
 }
 
 # === LOGGING SETUP ===
-SERVICE_NAME = "vault-service"
-logger = logging.getLogger(SERVICE_NAME)
+logger = logging.getLogger("vault")
 logger.setLevel(logging.INFO)
 handler = logging.StreamHandler(sys.stdout)
 if not logger.handlers:

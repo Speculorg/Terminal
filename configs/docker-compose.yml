@@ -88,14 +88,14 @@ services:
 
   ############  Edge / Proxy  ############
   traefik:
-    container_name: traefik-service
-    hostname: traefik-service
+    container_name: traefik
+    hostname: traefik
     env_file:
       - ./.env.${ENV_MODE}
     build:
       context: ../source/services/traefik
     environment:
-      SERVICE_NAME: traefik-service
+      SERVICE_NAME: traefik
       SERVICE_PORT: ${TRAEFIK_PORT}
       HEALTHCHECK_PORT: ${HEALTHCHECK_PORT}
     command:
@@ -133,14 +133,14 @@ services:
 
   ############  Core Infrastructure  ############
   consul:
-    container_name: consul-service
-    hostname: consul-service
+    container_name: consul
+    hostname: consul
     env_file:
       - ./.env.${ENV_MODE}
     build:
       context: ../source/services/consul
     environment:
-      SERVICE_NAME: consul-service
+      SERVICE_NAME: consul
       SERVICE_PORT: 8500
       HEALTHCHECK_PORT: ${HEALTHCHECK_PORT}
     networks:
@@ -166,8 +166,8 @@ services:
       start_period: 55s
 
   vault:
-    container_name: vault-service
-    hostname: vault-service
+    container_name: vault
+    hostname: vault
     env_file:
       - ./.env.${ENV_MODE}
     build:
@@ -175,7 +175,7 @@ services:
     cap_add:
       - IPC_LOCK
     environment:
-      SERVICE_NAME: vault-service
+      SERVICE_NAME: vault
       SERVICE_PORT: 8200
       HEALTHCHECK_PORT: ${HEALTHCHECK_PORT}
     networks:
