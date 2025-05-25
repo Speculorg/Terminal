@@ -18,7 +18,6 @@ class Service(BaseService):
         process = subprocess.Popen(["traefik", "--configFile=/etc/traefik/traefik.yml"])
         self.set_subprocess(process)
 
-        await self.register_in_consul()
 
         if process.poll() is not None:
             self.logger.error("Traefik startup error.")

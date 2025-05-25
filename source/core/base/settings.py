@@ -29,9 +29,6 @@ class EnvSettings(BaseSettings):
     CONSUL_HOST: str = Field(..., description="Consul agent host")
     CONSUL_PORT: int = Field(..., description="Consul agent port")
     CONSUL_DC: str = Field(..., description="Consul datacenter name")
-    CONSUL_TIMEOUT: int = Field(..., description="Consul connection timeout (seconds)")
-    CONSUL_CHECK_INTERVAL: str = Field(..., description="Consul service check interval")
-    CONSUL_CHECK_TIMEOUT: str = Field(..., description="Consul service check timeout")
 
     # 🔐 VAULT
     VAULT_ADDR: str = Field(..., description="Vault server address")

@@ -91,7 +91,7 @@ services:
     container_name: traefik
     hostname: traefik
     env_file:
-      - ./.env.${ENV_MODE}
+      - ./.env
     build:
       context: ../source/services/traefik
     environment:
@@ -117,7 +117,7 @@ services:
       - ../source/services/traefik/config:/etc/traefik:ro
       - ../source/core:/core:ro
       - ../source/services/traefik/app:/app:ro
-      - ../configs/.env.${ENV_MODE}:/opt/env/.env:ro
+      - ../configs/.env:/opt/env/.env:ro
     depends_on:
       consul:
         condition: service_healthy
@@ -125,7 +125,7 @@ services:
         condition: service_healthy
     restart: unless-stopped
     healthcheck:
-      test: ["CMD-SHELL", "curl -fsS --connect-timeout 5 http://localhost:${HEALTHCHECK_PORT}/health"]
+      test: ["CMD-SHELL", "curl -fsS --connect-timeout 5 http://localhost:80/ping"]
       interval: 55s
       timeout: 15s
       retries: 3
@@ -136,7 +136,7 @@ services:
     container_name: consul
     hostname: consul
     env_file:
-      - ./.env.${ENV_MODE}
+      - ./.env
     build:
       context: ../source/services/consul
     environment:
@@ -156,10 +156,10 @@ services:
       - ../source/services/consul/config:/consul/config:ro
       - ../source/core:/core:ro
       - ../source/services/consul/app:/app:ro
-      - ../configs/.env.${ENV_MODE}:/opt/env/.env:ro
+      - ../configs/.env:/opt/env/.env:ro
     restart: unless-stopped
     healthcheck:
-      test: ["CMD-SHELL", "curl -fsS --connect-timeout 5 http://localhost:${HEALTHCHECK_PORT}/health"]
+      test: ["CMD-SHELL", "curl -fsS --connect-timeout 5 http://localhost:8500/v1/status/leader"]
       interval: 55s
       timeout: 15s
       retries: 3
@@ -169,7 +169,7 @@ services:
     container_name: vault
     hostname: vault
     env_file:
-      - ./.env.${ENV_MODE}
+      - ./.env
     build:
       context: ../source/services/vault
     cap_add:
@@ -191,14 +191,14 @@ services:
       - ../source/services/vault/config:/vault/config
       - ../source/core:/core:ro
       - ../source/services/vault/app:/app:ro
-      - ../configs/.env.${ENV_MODE}:/opt/env/.env:ro
+      - ../configs/.env:/opt/env/.env:ro
     depends_on:
       consul:
         condition: service_healthy
     restart:
       unless-stopped
     healthcheck:
-      test: ["CMD-SHELL", "curl -fsS --connect-timeout 5 http://localhost:${HEALTHCHECK_PORT}/health"]
+      test: ["CMD-SHELL", "curl -fsS --connect-timeout 5 http://localhost:8200/v1/sys/health"]
       interval: 55s
       timeout: 15s
       retries: 3

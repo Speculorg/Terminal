@@ -28,7 +28,6 @@ class Service(BaseService):
             for line in result.stderr.decode().splitlines():
                 self.logger.error(f"[init-vault] {line}")
 
-        await self.register_in_consul()
 
         if process.poll() is not None:
             self.logger.error("Vault startup error.")
