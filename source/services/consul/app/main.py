@@ -18,14 +18,11 @@ class Service(BaseService):
         process = subprocess.Popen(["consul", "agent", "-config-file=/consul/config/consul.hcl"])
         self.set_subprocess(process)
 
-        await self.register_in_consul()
-
         if process.poll() is not None:
             self.logger.error("Consul startup error.")
             await self.stop()
             return
 
-        self.healthy = True
         self.logger.info("Consul service is running.")
         try:
             while not self._shutdown_event.is_set():

@@ -3,7 +3,6 @@ FROM python:3.13-alpine AS py
 # hadolint ignore=DL3013
 RUN pip install --no-cache-dir \
     requests \
-    aiohttp \
     pydantic \
     pydantic-settings
 

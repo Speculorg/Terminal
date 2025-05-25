@@ -97,7 +97,6 @@ services:
     environment:
       SERVICE_NAME: traefik
       SERVICE_PORT: ${TRAEFIK_PORT}
-      HEALTHCHECK_PORT: ${HEALTHCHECK_PORT}
     command:
       - "--configFile=/etc/traefik/traefik.yml"
     networks:
@@ -142,7 +141,6 @@ services:
     environment:
       SERVICE_NAME: consul
       SERVICE_PORT: 8500
-      HEALTHCHECK_PORT: ${HEALTHCHECK_PORT}
     networks:
       - net_private
     labels:
@@ -177,7 +175,6 @@ services:
     environment:
       SERVICE_NAME: vault
       SERVICE_PORT: 8200
-      HEALTHCHECK_PORT: ${HEALTHCHECK_PORT}
     networks:
       - net_private
     labels:
