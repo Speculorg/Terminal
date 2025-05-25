@@ -12,21 +12,20 @@ if not ENV_FILE.exists():
 
 
 class EnvSettings(BaseSettings):
-    # 🌐 GLOBAL
+    
     ENV_MODE: str = Field(..., description="Environment mode (develop/test/prod)")
     LOG_LEVEL: str = Field("INFO", description="Logging level (e.g. INFO, DEBUG)")
     PYTHONUNBUFFERED: int = Field(1, description="Unbuffered stdout")
 
-    # 🧭 CONSUL
+    TRAEFIK_PORT: int = Field(443, description="Traefik UI/API port")
+
     CONSUL_HOST: str = Field(..., description="Consul agent host")
     CONSUL_PORT: int = Field(..., description="Consul agent port")
     CONSUL_DC: str = Field(..., description="Consul datacenter name")
 
-    # 🔐 VAULT
-    VAULT_ADDR: str = Field(..., description="Vault server address")
+    VAULT_HOST: str = Field(..., description="Vault server host")
+    VAULT_PORT: int = Field(..., description="Vault server port")
 
-    # 🧊 TRAEFIK
-    TRAEFIK_PORT: int = Field(443, description="Traefik UI/API port")
 
     # 🛢 POSTGRES
     POSTGRES_USER: str = Field(..., description="PostgreSQL username")

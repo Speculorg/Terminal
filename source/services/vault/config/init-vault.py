@@ -8,7 +8,10 @@ import requests
 import logging
 
 
-VAULT_ADDR = os.getenv("VAULT_ADDR")
+VAULT_HOST = os.getenv("VAULT_HOST", "vault")
+VAULT_PORT = os.getenv("VAULT_PORT", "8200")
+VAULT_ADDR = f"http://{VAULT_HOST}:{VAULT_PORT}"
+
 VAULT_KEYS_PATH = "/vault/config/.vault_keys.json"
 
 SECRET_DATA = {
