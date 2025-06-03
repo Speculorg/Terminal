@@ -1,5 +1,6 @@
 # source\core\base\settings.py
 
+
 import os
 from pathlib import Path
 from pydantic_settings import BaseSettings
@@ -15,7 +16,6 @@ class EnvSettings(BaseSettings):
     
     ENV_MODE: str = Field(..., description="Environment mode (develop/test/prod)")
     LOG_LEVEL: str = Field("INFO", description="Logging level (e.g. INFO, DEBUG)")
-    PYTHONUNBUFFERED: int = Field(1, description="Unbuffered stdout")
 
     TRAEFIK_PORT: int = Field(443, description="Traefik UI/API port")
 
@@ -26,31 +26,7 @@ class EnvSettings(BaseSettings):
     VAULT_HOST: str = Field(..., description="Vault server host")
     VAULT_PORT: int = Field(..., description="Vault server port")
 
-
-    # 🛢 POSTGRES
-    POSTGRES_USER: str = Field(..., description="PostgreSQL username")
-    POSTGRES_PASSWORD: str = Field(..., description="PostgreSQL password")
-    POSTGRES_DB: str = Field(..., description="PostgreSQL database name")
-    POSTGRES_PORT: int = Field(..., description="PostgreSQL port")
-
-    # 🧠 REDIS
-    REDIS_PORT: int = Field(..., description="Redis port")
-
-    # 📦 RABBITMQ
-    RABBITMQ_DEFAULT_USER: str = Field(..., description="RabbitMQ username")
-    RABBITMQ_DEFAULT_PASS: str = Field(..., description="RabbitMQ password")
-    RABBITMQ_PORT: int = Field(..., description="RabbitMQ port")
-    RABBITMQ_MANAGEMENT_PORT: int = Field(..., description="RabbitMQ web UI port")
-
-    # 🔑 KEYCLOAK
-    KEYCLOAK_ADMIN: str = Field(..., description="Keycloak admin username")
-    KEYCLOAK_ADMIN_PASSWORD: str = Field(..., description="Keycloak admin password")
-    KEYCLOAK_PORT: int = Field(..., description="Keycloak HTTP port")
-    KEYCLOAK_REALM: str = Field(..., description="Keycloak realm name")
-    KEYCLOAK_CLIENT_ID: str = Field(..., description="Keycloak service client ID")
-    KEYCLOAK_CLIENT_SECRET: str = Field(..., description="Keycloak service client secret")
-
-    # ⚙️ SERVICE-SPECIFIC
+    # SERVICE-SPECIFIC
     SERVICE_NAME: str = Field(..., description="This container's logical service name")
     SERVICE_PORT: int = Field(..., description="Internal exposed service port")
     SERVICE_TAGS: str = Field("", description="Optional comma-separated list of tags")

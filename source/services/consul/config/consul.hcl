@@ -30,10 +30,18 @@ ports {
   dns  = 8600
 }
 
+
 dns_config {
   enable_truncate = true
   only_passing = true
   allow_stale = true
+}
+
+
+acl {
+  enabled = true
+  default_policy = "deny"
+  enable_token_persistence = true
 }
 
 

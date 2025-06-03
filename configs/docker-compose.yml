@@ -1,9 +1,6 @@
 # configs\docker-compose.yml
 
 
-###############################
-#            Networks         #
-###############################
 networks:
   net_private:
     driver: bridge
@@ -12,9 +9,6 @@ networks:
     driver: bridge
 
 
-###############################
-#          Volumes            #
-###############################
 volumes:
   consul_data:
     driver: local
@@ -31,108 +25,10 @@ volumes:
       device: ../volumes/vault_data
 
 
-  # postgres_data:
-  #   driver: local
-  #   driver_opts:
-  #     type: none
-  #     o: bind
-  #     device: ../volumes/postgres_data
-
-  # redis_data:
-  #   driver: local
-  #   driver_opts:
-  #     type: none
-  #     o: bind
-  #     device: ../volumes/redis_data
-
-  # rabbitmq_data:
-  #   driver: local
-  #   driver_opts:
-  #     type: none
-  #     o: bind
-  #     device: ../volumes/rabbitmq_data
-
-  # elasticsearch_data:
-  #   driver: local
-  #   driver_opts:
-  #     type: none
-  #     o: bind
-  #     device: ../volumes/elasticsearch_data
-
-  # grafana_data:
-  #   driver: local
-  #   driver_opts:
-  #     type: none
-  #     o: bind
-  #     device: ../volumes/grafana_data
-
-  # prometheus_data:
-  #   driver: local
-  #   driver_opts:
-  #     type: none
-  #     o: bind
-  #     device: ../volumes/prometheus_data
-
-  # shared_scripts:
-  #   driver: local
-  #   driver_opts:
-  #     type: none
-  #     o: bind
-  #     device: ../volumes/shared_scripts
-
-
-###############################
-#          Services           #
-###############################
 services:
 
-  ############  Edge / Proxy  ############
-  traefik:
-    container_name: traefik
-    hostname: traefik
-    env_file:
-      - ./.env
-    build:
-      context: ../source/services/traefik
-    environment:
-      SERVICE_NAME: traefik
-      SERVICE_PORT: ${TRAEFIK_PORT}
-    command:
-      - "--configFile=/etc/traefik/traefik.yml"
-    networks:
-      - net_public
-      - net_private
-    ports:
-      - "80:80"
-      - "443:443"
-    labels:
-      - "traefik.enable=true"
-      - "traefik.http.routers.traefik.rule=Host(`traefik.localhost`)"
-      - "traefik.http.routers.traefik.entrypoints=websecure"
-      - "traefik.http.routers.traefik.service=api@internal"
-      - "traefik.http.routers.traefik.tls=true"
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock:ro
-      - ../source/services/traefik/config:/etc/traefik:ro
-      - ../source/core:/core:ro
-      - ../source/services/traefik/app:/app:ro
-      - ../configs/.env:/opt/env/.env:ro
-    depends_on:
-      consul:
-        condition: service_healthy
-      vault:
-        condition: service_healthy
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD-SHELL", "curl -fsS --connect-timeout 5 http://localhost:80/ping"]
-      interval: 55s
-      timeout: 15s
-      retries: 3
-      start_period: 55s
-
-  ############  Core Infrastructure  ############
   consul:
-    container_name: consul
+    container_name: Consul
     hostname: consul
     env_file:
       - ./.env
@@ -151,7 +47,8 @@ services:
       - "traefik.http.services.consul-ui.loadbalancer.server.port=8500"
     volumes:
       - consul_data:/consul/data
-      - ../source/services/consul/config:/consul/config:ro
+      - ../source/services/consul/config:/consul/config:rw
+      - ../source/services/consul/secrets:/consul/secrets
       - ../source/core:/core:ro
       - ../source/services/consul/app:/app:ro
       - ../configs/.env:/opt/env/.env:ro
@@ -164,17 +61,19 @@ services:
       start_period: 55s
 
   vault:
-    container_name: vault
+    container_name: Vault
     hostname: vault
     env_file:
       - ./.env
     build:
       context: ../source/services/vault
     cap_add:
-      - IPC_LOCK
+      - IPC_LOCK 
     environment:
       SERVICE_NAME: vault
       SERVICE_PORT: 8200
+      REGISTERING_CONSUL_TOKEN_FILE: /consul/secrets/registering_consul_token
+      CONSUL_TOKEN_FILE: /consul/secrets/vault_consul_token
     networks:
       - net_private
     labels:
@@ -186,6 +85,7 @@ services:
     volumes:
       - vault_data:/vault/file
       - ../source/services/vault/config:/vault/config
+      - ../source/services/consul/secrets:/consul/secrets:ro
       - ../source/core:/core:ro
       - ../source/services/vault/app:/app:ro
       - ../configs/.env:/opt/env/.env:ro
@@ -196,6 +96,52 @@ services:
       unless-stopped
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS --connect-timeout 5 http://localhost:8200/v1/sys/health"]
+      interval: 55s
+      timeout: 15s
+      retries: 3
+      start_period: 55s
+
+  traefik:
+    container_name: Traefik
+    hostname: traefik
+    env_file:
+      - ./.env
+    build:
+      context: ../source/services/traefik
+    environment:
+      SERVICE_NAME: traefik
+      SERVICE_PORT: ${TRAEFIK_PORT}
+      REGISTERING_CONSUL_TOKEN_FILE: /consul/secrets/registering_consul_token
+      CONSUL_TOKEN_FILE: /consul/secrets/traefik_consul_token
+    command:
+      - "--configFile=/etc/traefik/traefik.yml"
+    networks:
+      - net_public
+      - net_private
+    ports:
+      - "80:80"
+      - "443:443"
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.traefik.rule=Host(`traefik.localhost`)"
+      - "traefik.http.routers.traefik.entrypoints=websecure"
+      - "traefik.http.routers.traefik.service=api@internal"
+      - "traefik.http.routers.traefik.tls=true"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ../source/services/traefik/config:/etc/traefik:ro
+      - ../source/services/consul/secrets:/consul/secrets:ro
+      - ../source/core:/core:ro
+      - ../source/services/traefik/app:/app:ro
+      - ../configs/.env:/opt/env/.env:ro
+    depends_on:
+      consul:
+        condition: service_healthy
+      vault:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS --connect-timeout 5 http://localhost:80/ping"]
       interval: 55s
       timeout: 15s
       retries: 3
