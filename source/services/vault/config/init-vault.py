@@ -1,38 +1,46 @@
 # source\services\vault\config\init-vault.py
 
-import os
-import time
+
+from __future__ import annotations
+
 import json
-import sys
-import requests
 import logging
+import sys
+import time
+from pathlib import Path
+from typing import Dict
+
+import requests
+
+sys.path.append("/")
+from core.base.settings import settings                       # pylint: disable=wrong-import-position
 
 
-VAULT_HOST = os.getenv("VAULT_HOST", "vault")
-VAULT_PORT = os.getenv("VAULT_PORT", "8200")
-VAULT_ADDR = f"http://{VAULT_HOST}:{VAULT_PORT}"
-
-VAULT_KEYS_PATH = "/vault/config/.vault_keys.json"
-
-SECRET_DATA = {
-    "postgres": {
-        "user": os.getenv("POSTGRES_USER"),
-        "password": os.getenv("POSTGRES_PASSWORD"),
-        "db": os.getenv("POSTGRES_DB"),
-        "port": os.getenv("POSTGRES_PORT")
+# ─────────────────── constants ────────────────────────────
+VAULT_ADDR = f"http://{settings.VAULT_HOST}:{settings.VAULT_PORT}"
+KEYS_PATH = Path("/vault/config/.vault_keys.json")
+SCHEMA: Dict[str, Dict] = {
+    "secrets": {
+        "database": {"user": "speculorg", "pass": "speculpwd"},
+        "rabbitmq": {"user": "guest",      "pass": "guest"},
+        "keycloak": {"user": "admin",      "pass": "admin"},
     },
-    "redis": {
-        "port": os.getenv("REDIS_PORT")
+    "policies": {
+        # name : policy-string
+        "read-db": """
+            path "secret/data/database" {
+            capabilities = ["read"]
+            }
+            """,
     },
-    "rabbitmq": {
-        "user": os.getenv("RABBITMQ_DEFAULT_USER"),
-        "password": os.getenv("RABBITMQ_DEFAULT_PASS"),
-        "port": os.getenv("RABBITMQ_PORT"),
-        "management_port": os.getenv("RABBITMQ_MANAGEMENT_PORT")
-    }
+    "approles": {
+        # name : { "policies": ["read-db"], "secret_id_ttl": "0s", ... }
+        "db-role": {"policies": ["read-db"], "secret_id_ttl": "0s"},
+    },
 }
 
-# === LOGGING SETUP ===
+
+# ─────────────────── logging ────────────────────────────
 logger = logging.getLogger("vault")
 logger.setLevel(logging.INFO)
 handler = logging.StreamHandler(sys.stdout)
@@ -40,139 +48,91 @@ if not logger.handlers:
     logger.addHandler(handler)
 
 
-def log(msg): logger.info(msg)
-def warn(msg): logger.warning(msg)
-def fatal(msg): logger.error(msg); sys.exit(1)
+def _fatal(msg: str) -> None:
+    logger.error(msg)
+    sys.exit(1)
 
 
-def wait_for_vault(timeout=60):
-    log("Waiting for Vault to be available...")
-    for _ in range(timeout):
+# ──────────────────── helpers ─────────────────────────────
+def _wait_vault(timeout: int = 30) -> Dict:
+    url = f"{VAULT_ADDR}/v1/sys/health"
+    end = time.time() + timeout
+    while time.time() < end:
         try:
-            res = requests.get(f"{VAULT_ADDR}/v1/sys/health", timeout=2)
-            if res.status_code == 200:
-                # Vault initialized, unsealed, ready
-                log("Vault is unsealed and active.")
-                return
-            elif res.status_code == 503:
-                # Vault is sealed but initialized
-                body = res.json()
-                if body.get("initialized") and body.get("sealed"):
-                    log("Vault is sealed but initialized.")
-                    return
-                elif not body.get("initialized"):
-                    log("Vault is not yet initialized.")
-                    return
-                else:
-                    log(f"Vault 503 response: {body}")
-            elif res.status_code == 429:
-                log("Vault is unsealed and active, but in standby (429).")
-                return
-            elif res.status_code == 501:
-                log("Vault not initialized (501).")
-                return
-            else:
-                log(f"Unexpected status: {res.status_code}")
-        except Exception as e:
-            warn(f"Vault not reachable yet: {e}")
+            r = requests.get(url, timeout=2)
+            if r.status_code in (200, 429, 501, 503):
+                return r.json() if r.content else {}
+        except Exception:
+            pass
         time.sleep(1)
-    fatal("Vault not responding after timeout.")
+    _fatal("Vault not responding")
 
 
-def is_initialized():
-    log("Checking if Vault is initialized ...")
-    try:
-        res = requests.get(f"{VAULT_ADDR}/v1/sys/init")
-        return res.json().get("initialized", False)
-    except Exception as e:
-        fatal(f"Failed to get initialization status: {e}")
+def _api(method: str, path: str, token: str | None = None, **kw):
+    hdr = {"X-Vault-Token": token} if token else {}
+    return requests.request(method, f"{VAULT_ADDR}{path}", headers=hdr, timeout=5, **kw)
 
 
-def init_vault():
-    log("Initializing Vault ...")
-    init_data = {
-        "secret_shares": 1,
-        "secret_threshold": 1
-    }
-    res = requests.put(f"{VAULT_ADDR}/v1/sys/init", json=init_data)
-    if res.status_code != 200:
-        fatal(f"Init failed: {res.status_code} {res.text}")
-    with open(VAULT_KEYS_PATH, "w") as f:
-        f.write(res.text)
-    log("Vault initialized and keys saved.")
+# ──────────────────── workflow ────────────────────────────
+def main() -> None:
+    # ensure vault reachable
+    state = _wait_vault()
 
-
-def unseal():
-    log("Unsealing Vault ...")
-    try:
-        with open(VAULT_KEYS_PATH) as f:
-            keys = json.load(f)
-        res = requests.put(f"{VAULT_ADDR}/v1/sys/unseal", json={"key": keys["keys"][0]})
+    # ── init / save keys ───────────────────────────────
+    if not KEYS_PATH.exists():
+        if state.get("initialized"):   # keys lost?
+            _fatal("Vault already initialised but keys file missing")
+        logger.info("Initialising Vault ...")
+        res = _api("PUT", "/v1/sys/init", json={"secret_shares": 1, "secret_threshold": 1})
         if res.status_code != 200:
-            fatal(f"Unseal failed: {res.status_code} {res.text}")
-        log("Unseal OK.")
-    except Exception as e:
-        fatal(f"Unseal error: {e}")
+            _fatal("Init error: {res.status_code} {res.text}")
+        KEYS_PATH.write_text(res.text)
+        logger.info("Keys saved -> %s", KEYS_PATH)
 
+    with KEYS_PATH.open() as f:
+        keys = json.load(f)
 
-def login_root():
-    log("Login root ...")
-    try:
-        with open(VAULT_KEYS_PATH) as f:
-            keys = json.load(f)
-        log("Login root OK.")
-        return {"X-Vault-Token": keys["root_token"]}
-    except Exception as e:
-        fatal(f"Cannot load root token: {e}")
+    root_token = keys["root_token"]
+    unseal_key = keys["keys"][0]
 
+    # ── unseal (idempotent) ────────────────────────────
+    if state.get("sealed"):
+        logger.info("Unsealing ...")
+        res = _api("PUT", "/v1/sys/unseal", json={"key": unseal_key})
+        if res.status_code != 200:
+            _fatal("Unseal error: {res.status_code} {res.text}")
 
-def mount_secret_if_needed(headers):
-    log("Enabling KV secrets engine at /secret ...")
-    res = requests.get(f"{VAULT_ADDR}/v1/sys/mounts", headers=headers)
-    if res.status_code != 200:
-        fatal(f"Cannot list mounts: {res.status_code} {res.text}")
-    if "secret/" in res.json():
-        log("KV already mounted.")
-        return
-    res = requests.post(f"{VAULT_ADDR}/v1/sys/mounts/secret", headers=headers, json={"type": "kv"})
-    if res.status_code != 204:
-        fatal(f"Mount failed: {res.status_code} {res.text}")
-    log("KV mounted.")
+    # ── enable KV v2 if required ───────────────────────
+    mounts = _api("GET", "/v1/sys/mounts", token=root_token).json()
+    if "secret/" not in mounts:
+        logger.info("Enabling KV engine ...")
+        _api("POST", "/v1/sys/mounts/secret", token=root_token, json={"type": "kv", "options": {"version": "2"}})
 
+    # ── write secrets ──────────────────────────────────
+    for name, data in SCHEMA["secrets"].items():
+        path = f"/v1/secret/data/{name}"
+        _api("POST", path, token=root_token, json={"data": data})
+        logger.info("Secret written -> %s", name)
 
-def put_secrets(headers):
-    log("Putting secrets ...")
-    for name, secret in SECRET_DATA.items():
-        if not secret or any(v is None for v in secret.values()):
-            warn(f"⚠️ Skipping secret {name}, has empty values: {secret}")
-            continue
-        log(f"Putting secret: {name} ...")
-        res = requests.post(f"{VAULT_ADDR}/v1/secret/data/{name}", headers=headers, json={"data": secret})
-        if res.status_code not in (200, 204):
-            fatal(f"Failed to store {name}: {res.status_code} {res.text}")
-        log(f"✓ Secret {name} written.")
+    # ── policies ───────────────────────────────────────
+    for pol, rules in SCHEMA["policies"].items():
+        _api("PUT", "/v1/sys/policies/acl/"+pol, token=root_token, json={
+            "policy": rules,
+            "name": pol,
+            "type": "service",
+        })
+        logger.info("Policy ensured -> %s", pol)
 
+    # ── approles ───────────────────────────────────────
+    for role, cfg in SCHEMA["approles"].items():
+        _api("POST", f"/v1/auth/approle/role/{role}", token=root_token, json=cfg)
+        logger.info("Approle ensured -> %s", role)
 
-def main():
-    log("Running Vault initializer...")
-    wait_for_vault()
-
-    if not os.path.exists(VAULT_KEYS_PATH):
-        if not is_initialized():
-            init_vault()
-        else:
-            fatal("Vault is initialized but key file is missing. Please investigate.")
-    else:
-        log("Vault already initialized.")
-
-    unseal()
-    headers = login_root()
-    mount_secret_if_needed(headers)
-    put_secrets(headers)
-
-    log("Vault init complete.")
-    sys.exit(0)
+    logger.info("OK - init-vault done")
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception as exc:           # pylint: disable=broad-except
+        _fatal(str(exc))

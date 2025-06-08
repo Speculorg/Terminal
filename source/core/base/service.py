@@ -1,141 +1,133 @@
 # source\core\base\service.py
 
 
+from __future__ import annotations
+
 import asyncio
+import json
 import logging
-import os
 import signal
 import socket
+import requests
 import sys
 import time
 from pathlib import Path
 from typing import Optional
 
-import requests
 
 sys.path.append("/")
-from core.base.settings import settings   # pylint: disable=wrong-import-position
+from core.base.settings import settings
+
+
+# ────────────────────────── constants ──────────────────────────
+LOG_FORMAT = ('{"ts":"%(asctime)s","svc":"' + settings.SERVICE_NAME + '","lvl":"%(levelname)s","msg":"%(message)s"}')
 
 
 class BaseService:
-    """
-    Basic asynchronous wrapper for Speculorg services.
-    """
-
-    # ──────────────────────────── INIT / START ────────────────────────────
+    # ───────────────────── lifecycle ─────────────────────
     def __init__(self) -> None:
-        self.env = settings
-        self.service_name = self.env.SERVICE_NAME
-        self.service_port = int(self.env.SERVICE_PORT)
-        self.consul_host = self.env.CONSUL_HOST
-        self.consul_port = int(self.env.CONSUL_PORT)
-        self.logger = self._setup_logger()
+        self._logger = self._setup_logger()
         self._shutdown_event: asyncio.Event = asyncio.Event()
         self._main_task: Optional[asyncio.Task] = None
         self._subprocess = None  # type: ignore
 
-        # ───── Consul tokens ──────
-        # path = os.environ.get("CONSUL_TOKEN_FILE", "")
-        # self.consul_token = Path(path).read_text().strip() if path else ""
-        # self.logger.info("self.consul_token = %s", self.consul_token)
 
-    # ──────────────────────────── LIFECYCLE ────────────────────────────
     async def start(self) -> None:
-        self.logger.info("Starting service %s", self.service_name)
+        self._logger.info("Entering BaseService ...")
         self._setup_signal_handlers()
 
-        await asyncio.sleep(0.1)
-        self._main_task = asyncio.create_task(self.run())  # noqa
+        await self.before_run()
+
+        self._main_task = asyncio.create_task(self.run())
         await self._shutdown_event.wait()
 
-        self.logger.info("Shutdown flag set → waiting main task …")
         if self._main_task:
             await self._main_task
-        self.logger.info("Service fully stopped.")
+        await self.after_stop()
+        self._logger.info("Service fully stopped")
 
-    async def run(self) -> None:  # noqa: D401
-        """Main service loop."""
-        self.logger.info("Service loop started.")
-        try:
-            while not self._shutdown_event.is_set():
-                await asyncio.sleep(30)
-        except asyncio.CancelledError:
-            self.logger.info("Main task cancelled.")
-        finally:
-            await self.stop()
 
-    async def stop(self) -> None:
-        """Stop the service."""
-        self.logger.info("Stopping service …")
-        if self._subprocess and self._subprocess.poll() is None:
-            self.logger.info("Terminating subprocess …")
-            self._subprocess.terminate()
-            try:
-                self._subprocess.wait(timeout=10)
-                self.logger.info("Subprocess terminated gracefully.")
-            except Exception:  # pylint: disable=broad-except
-                self.logger.warning("Subprocess didn`t stop in time → killing.")
-                self._subprocess.kill()
+    # subclasses override ----------------------------------------------------------------
+    async def before_run(self) -> None: ...
 
-    # ──────────────────────────── SIGNALS ────────────────────────────
+
+    async def run(self) -> None:                                         # noqa: D401
+        """Long-living loop - must be overridden."""
+        while not self._shutdown_event.is_set():
+            await asyncio.sleep(60)
+
+
+    async def after_stop(self) -> None: ...
+    # ------------------------------------------------------------------------------------
+
+
+    # ─────────────────── graceful shutdown ───────────────────
     def _setup_signal_handlers(self) -> None:
-        """Setup signal handlers."""
         loop = asyncio.get_event_loop()
         try:
-            loop.add_signal_handler(signal.SIGTERM,
-                                    lambda: asyncio.create_task(self._shutdown("SIGTERM")))
-            loop.add_signal_handler(signal.SIGINT,
-                                    lambda: asyncio.create_task(self._shutdown("SIGINT")))
-            self.logger.info("SIGTERM / SIGINT handlers registered.")
+            for sig in (signal.SIGTERM, signal.SIGINT):
+                loop.add_signal_handler(sig, lambda s=sig: self._on_signal(s))
+            self._logger.info("SIGTERM/SIGINT handlers registered")
         except NotImplementedError:
-            self.logger.warning("Signal handlers not supported on this platform.")
+            self._logger.warning("Signal handlers unsupported on this platform")
 
-    async def _shutdown(self, signame: str) -> None:
-        """Set shutdown flag."""
-        self.logger.info(f"Received {signame} → set shutdown flag.")
+
+    def _on_signal(self, signum: signal.Signals) -> None:
+        self._logger.info("Received %s -> shutdown flag set", signum.name)
         self._shutdown_event.set()
 
-    # ──────────────────────────── CONSUL REGISTRATION ────────────────────────────
+
+    # ────────────────── subprocess helper ───────────────────
+    def set_subprocess(self, popen) -> None:                            # subprocess.Popen
+        self._subprocess = popen
+
+
+    async def _terminate_subprocess(self) -> None:
+        if self._subprocess and self._subprocess.poll() is None:
+            self._logger.info("Terminating child process …")
+            self._subprocess.terminate()
+            try:
+                await asyncio.get_event_loop().run_in_executor(None, self._subprocess.wait, 10)
+            except Exception:                                           # pylint: disable=broad-except
+                self._logger.warning("Child not stopped -> kill")
+                self._subprocess.kill()
+
+
+    # ─────────────── consul registration ────────────────
     async def register_in_consul(self) -> None:
-        """Register service in Consul."""
-        if self.service_name == "consul":
-            self.logger.info("Skip Consul self-registration.")
+        if settings.SERVICE_NAME == "consul":
+            self._logger.info("Skip Consul self-registration")
             return
-        
-        path = os.environ.get("REGISTERING_CONSUL_TOKEN_FILE", "")
-        self.registering_consul_token = Path(path).read_text().strip() if path else ""
-        # self.logger.info("self.registering_consul_token = %s", self.registering_consul_token)        
-        
-        self.logger.info("Registering service in Consul …")
-        if not await self._wait_for_port(self.consul_host, self.consul_port, 20):
-            self.logger.error("Consul not reachable → registration skipped.")
+
+        token_path = settings.REGISTERING_CONSUL_TOKEN_FILE
+        token = Path(token_path).read_text().strip() if token_path else ""
+
+        if not await self._wait_port(settings.CONSUL_HOST, settings.CONSUL_PORT, 20):
+            self._logger.error("Consul not reachable - registration skipped")
             return
 
         payload = {
-            "Name": self.service_name,
-            "Port": self.service_port,
-            "Tags": [t.strip() for t in self.env.SERVICE_TAGS.split(",") if t],
+            "Name":  settings.SERVICE_NAME,
+            "Port":  settings.SERVICE_PORT,
+            "Tags":  [t.strip() for t in settings.SERVICE_TAGS.split(",") if t],
+            "Meta":  {"env": settings.ENV_MODE},
+            "EnableTagOverride": False,
         }
 
-        headers = {"X-Consul-Token": self.registering_consul_token} if self.registering_consul_token else {}
-        url = f"http://{self.consul_host}:{self.consul_port}/v1/agent/service/register"
+        hdrs = {"X-Consul-Token": token} if token else {}
+        url = f"http://{settings.CONSUL_HOST}:{settings.CONSUL_PORT}/v1/agent/service/register"
 
         try:
-            resp = requests.put(url, json=payload, headers=headers, timeout=5)
+            resp = requests.put(url, headers=hdrs, data=json.dumps(payload), timeout=5)
             resp.raise_for_status()
-            self.logger.info("Service registered in Consul.")
-        except Exception as exc:  # pylint: disable=broad-except
-            self.logger.error(f"Consul registration failed: {exc}")
-
-    # ──────────────────────────── HELPERS ────────────────────────────
-    def set_subprocess(self, process) -> None:
-        """Save Popen-object of child process for proper shutdown."""
-        self._subprocess = process
+            self._logger.info("OK - Registered in consul")
+        except Exception as exc:                                        # pylint: disable=broad-except
+            self._logger.error("Failed registered in consul: %s", exc)
 
 
+    # ────────────────────── helpers ──────────────────────
     @staticmethod
-    async def _wait_for_port(host: str, port: int, timeout: int) -> bool:
-        """Wait for port to be open."""
+    async def _wait_port(host: str, port: int, timeout: int) -> bool:
         deadline = time.time() + timeout
         while time.time() < deadline:
             try:
@@ -145,27 +137,13 @@ class BaseService:
                 await asyncio.sleep(1)
         return False
 
+
     @staticmethod
-    def _read_token_file(path: str) -> str:
-        """Read token from specified path"""
-        try:
-            p = Path(path)
-            if p.is_file():
-                return p.read_text().strip()
-        except Exception:  # pylint: disable=broad-except
-            pass
-        return ""
-
-
-    def _setup_logger(self) -> logging.Logger:
-        """Setup logger"""
-        logger = logging.getLogger(self.service_name)
-        logger.setLevel(getattr(logging, self.env.LOG_LEVEL.upper(), logging.INFO))
+    def _setup_logger() -> logging.Logger:
+        logger = logging.getLogger(settings.SERVICE_NAME)
         if not logger.handlers:
             handler = logging.StreamHandler(sys.stdout)
-            handler.setFormatter(logging.Formatter(
-                '{"ts":"%(asctime)s","svc":"' + self.service_name +
-                '","lvl":"%(levelname)s","msg":"%(message)s"}'
-            ))
+            handler.setFormatter(logging.Formatter(LOG_FORMAT))
             logger.addHandler(handler)
+        logger.setLevel(getattr(logging, settings.LOG_LEVEL.upper(), logging.INFO))
         return logger

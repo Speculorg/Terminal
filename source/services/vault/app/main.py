@@ -1,49 +1,56 @@
 # source/services/vault/app/main.py
 
-import sys
-import os
+
+from __future__ import annotations
+
 import asyncio
+import sys
 import subprocess
+from pathlib import Path
 
 sys.path.append("/")
+from core.base.settings import settings
 from core.base.service import BaseService
 
-os.environ["SERVICE_NAME"] = "vault"
-os.environ["SERVICE_PORT"] = "8200"
-os.environ["SERVICE_TAGS"] = "core,infra,secrets"
+VAULT_CMD   = ["vault", "server", "-config=/vault/config/vault.hcl"]
+INIT_SCRIPT = Path("/vault/config/init-vault.py")
 
-class Service(BaseService):
-    async def run(self):
-        self.logger.info("Starting Vault subprocess...")
-        process = subprocess.Popen(["vault", "server", "-config=/vault/config/vault.hcl"])
-        self.set_subprocess(process)
+
+class VaultService(BaseService):
+
+    async def before_run(self) -> None: ...
+
+
+    async def run(self) -> None:                         # noqa: D401
+        self._logger.info("Starting service: %s", " ".join(VAULT_CMD))
+
+        proc = subprocess.Popen(VAULT_CMD)              # noqa: S603,S607
+        self.set_subprocess(proc)
 
         await asyncio.sleep(10)
-        self.logger.info("Running Vault initializer...")
-        result = subprocess.run(["python3", "/vault/config/init-vault.py"], capture_output=True)
-        if result.stdout:
-            for line in result.stdout.decode().splitlines():
-                self.logger.info(f"[init-vault] {line}")
-        if result.stderr:
-            for line in result.stderr.decode().splitlines():
-                self.logger.error(f"[init-vault] {line}")
+        await self._run_init_script()
 
+        await asyncio.sleep(10) 
         await self.register_in_consul()
 
-        if process.poll() is not None:
-            self.logger.error("Vault startup error.")
-            await self.stop()
-            return
+        while not self._shutdown_event.is_set():
+            await asyncio.sleep(60)
 
-        self.logger.info("Vault service is running.")
-        try:
-            while not self._shutdown_event.is_set():
-                await asyncio.sleep(60)
-        except asyncio.CancelledError:
-            self.logger.info("Service cancelled.")
-        finally:
-            await self.stop()
+
+    async def _run_init_script(self) -> None:
+        self._logger.info("Running %s", INIT_SCRIPT.name)
+
+        result = subprocess.run(["python3", str(INIT_SCRIPT)], capture_output=True)
+        
+        for ln in result.stdout.splitlines():
+            self._logger.info("[init] %s", ln)
+        for ln in result.stderr.splitlines():
+            self._logger.error("[init] %s", ln)
+
+
+    async def after_stop(self) -> None: 
+        await self._terminate_subprocess()
+
 
 if __name__ == "__main__":
-    svc = Service()
-    asyncio.run(svc.start())
+    asyncio.run(VaultService().start())

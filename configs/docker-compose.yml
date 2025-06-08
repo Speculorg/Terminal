@@ -31,12 +31,14 @@ services:
     container_name: Consul
     hostname: consul
     env_file:
-      - ./.env
+      - ./debug.env
     build:
       context: ../source/services/consul
     environment:
       SERVICE_NAME: consul
       SERVICE_PORT: 8500
+      SERVICE_TAGS: "core,infra,dns,discovery"
+      CONSUL_TOKEN_FILE: "/consul/secrets/agent_consul_token"
     networks:
       - net_private
     labels:
@@ -51,7 +53,7 @@ services:
       - ../source/services/consul/secrets:/consul/secrets
       - ../source/core:/core:ro
       - ../source/services/consul/app:/app:ro
-      - ../configs/.env:/opt/env/.env:ro
+      - ../configs/debug.env:/opt/env/.env:ro
     restart: unless-stopped
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS --connect-timeout 5 http://localhost:8500/v1/status/leader"]
@@ -64,16 +66,17 @@ services:
     container_name: Vault
     hostname: vault
     env_file:
-      - ./.env
+      - ./debug.env
     build:
       context: ../source/services/vault
     cap_add:
       - IPC_LOCK 
     environment:
-      SERVICE_NAME: vault
-      SERVICE_PORT: 8200
-      REGISTERING_CONSUL_TOKEN_FILE: /consul/secrets/registering_consul_token
-      CONSUL_TOKEN_FILE: /consul/secrets/vault_consul_token
+      SERVICE_NAME:  vault
+      SERVICE_PORT:  8200
+      SERVICE_TAGS:  "core,infra,secret"
+      CONSUL_TOKEN_FILE: "/consul/secrets/vault_consul_token"
+      REGISTERING_CONSUL_TOKEN_FILE: "/consul/secrets/registering_consul_token"
     networks:
       - net_private
     labels:
@@ -88,7 +91,7 @@ services:
       - ../source/services/consul/secrets:/consul/secrets:ro
       - ../source/core:/core:ro
       - ../source/services/vault/app:/app:ro
-      - ../configs/.env:/opt/env/.env:ro
+      - ../configs/debug.env:/opt/env/.env:ro
     depends_on:
       consul:
         condition: service_healthy
@@ -105,14 +108,15 @@ services:
     container_name: Traefik
     hostname: traefik
     env_file:
-      - ./.env
+      - ./debug.env
     build:
       context: ../source/services/traefik
     environment:
       SERVICE_NAME: traefik
-      SERVICE_PORT: ${TRAEFIK_PORT}
+      SERVICE_PORT: 443
+      SERVICE_TAGS:  "core,infra,proxy"
+      CONSUL_TOKEN_FILE: "/consul/secrets/traefik_consul_token"
       REGISTERING_CONSUL_TOKEN_FILE: /consul/secrets/registering_consul_token
-      CONSUL_TOKEN_FILE: /consul/secrets/traefik_consul_token
     command:
       - "--configFile=/etc/traefik/traefik.yml"
     networks:
@@ -133,7 +137,7 @@ services:
       - ../source/services/consul/secrets:/consul/secrets:ro
       - ../source/core:/core:ro
       - ../source/services/traefik/app:/app:ro
-      - ../configs/.env:/opt/env/.env:ro
+      - ../configs/debug.env:/opt/env/.env:ro
     depends_on:
       consul:
         condition: service_healthy

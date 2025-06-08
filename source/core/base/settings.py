@@ -1,42 +1,39 @@
 # source\core\base\settings.py
 
 
-import os
 from pathlib import Path
-from pydantic_settings import BaseSettings
 from pydantic import Field
+from pydantic_settings import BaseSettings
 
 
 ENV_FILE = Path("/opt/env/.env")
-if not ENV_FILE.exists():
-    raise FileNotFoundError(f"Environment file not found: {ENV_FILE}")
 
 
 class EnvSettings(BaseSettings):
-    
-    ENV_MODE: str = Field(..., description="Environment mode (develop/test/prod)")
-    LOG_LEVEL: str = Field("INFO", description="Logging level (e.g. INFO, DEBUG)")
+    ENV_MODE: str = Field("develop", description="Execution mode: develop / test / prod")
+    LOG_LEVEL: str = Field("INFO", description="Root logging level")
 
-    TRAEFIK_PORT: int = Field(443, description="Traefik UI/API port")
+    CONSUL_HOST: str = Field("consul", description="Consul agent host")
+    CONSUL_PORT: int = Field(8500, description="Consul HTTP port")
+    CONSUL_DC:   str = Field("speculorg-dc", description="Consul datacenter")
 
-    CONSUL_HOST: str = Field(..., description="Consul agent host")
-    CONSUL_PORT: int = Field(..., description="Consul agent port")
-    CONSUL_DC: str = Field(..., description="Consul datacenter name")
+    VAULT_HOST: str = Field("vault", description="Vault host")
+    VAULT_PORT: int = Field(8200, description="Vault HTTP port")
 
-    VAULT_HOST: str = Field(..., description="Vault server host")
-    VAULT_PORT: int = Field(..., description="Vault server port")
+    TRAEFIK_PORT: int = Field(443, description="Traefik HTTPS entry-point")
 
-    # SERVICE-SPECIFIC
-    SERVICE_NAME: str = Field(..., description="This container's logical service name")
-    SERVICE_PORT: int = Field(..., description="Internal exposed service port")
-    SERVICE_TAGS: str = Field("", description="Optional comma-separated list of tags")
-    METRICS_PORT: int = Field(9100, description="Port for Prometheus metrics export")
+    CONSUL_TOKEN_FILE: str = Field("", description="Path to Consul ACL token for the running service")
+    REGISTERING_CONSUL_TOKEN_FILE: str = Field("", description="Token with 'service:write' rights for registration")
+
+    SERVICE_NAME: str = Field(..., description="Logical name of the containerised service")
+    SERVICE_PORT: int = Field(..., description="Internal port the service listens on")
+    SERVICE_TAGS: str = Field("",   description="Comma-separated list of Consul tags")
+
 
     class Config:
-        env_file = str(ENV_FILE)
+        env_file = ENV_FILE
         env_file_encoding = "utf-8"
-        # extra = "ignore"
+        case_sensitive = False
 
 
-# Singleton instance
 settings = EnvSettings()

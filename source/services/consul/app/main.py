@@ -1,16 +1,10 @@
 # source\services\consul\app\main.py
 
 
-"""
-Consul service starter.
-"""
-
-
 from __future__ import annotations
 
 import asyncio
 import json
-import os
 import signal
 import subprocess
 import sys
@@ -20,27 +14,25 @@ from pathlib import Path
 import requests
 
 sys.path.append("/")
+from core.base.settings import settings
 from core.base.service import BaseService
 
 
-# ─────────────────────────── paths & const ──────────────────────────
-os.environ.setdefault("SERVICE_NAME", "consul")
-os.environ.setdefault("SERVICE_PORT", "8500")
-os.environ.setdefault("SERVICE_TAGS", "core,infra,dns,discovery")
-SECRETS_DIR = Path("/consul/secrets")
-SECRETS_DIR.mkdir(parents=True, exist_ok=True)
-AGENT_TOKEN_FILE = SECRETS_DIR / "agent_consul_token"
-ROOT_TOKEN_JSON = SECRETS_DIR / "root_consul_token.json"
+# ───────────────────────── constants ─────────────────────────
+SECRETS_DIR             = Path("/consul/secrets")
+AGENT_TOKEN_FILE        = SECRETS_DIR / "agent_consul_token"
+ROOT_TOKEN_JSON         = SECRETS_DIR / "root_consul_token.json"
+INIT_SCRIPT             = Path("/consul/config/init-consul.py")
+CONSUL_CMD              = ["consul", "agent", "-config-file=/consul/config/consul.hcl"]
+LOCAL_LEADER_URL        = f"http://{settings.CONSUL_HOST}:{settings.CONSUL_PORT}/v1/status/leader"
 
 
-# ─────────────────────────── helpers ────────────────────────────────
-def _wait_for_leader(host: str = "localhost", port: int = 8500, timeout: int = 30) -> bool:
-    """Waits for the Consul leader to be ready."""
+# ───────────────────────── helpers ───────────────────────────
+def wait_for_leader(timeout: int = 30) -> bool:
     deadline = time.time() + timeout
-    url = f"http://{host}:{port}/v1/status/leader"
     while time.time() < deadline:
         try:
-            r = requests.get(url, timeout=2)
+            r = requests.get(LOCAL_LEADER_URL, timeout=2)
             if r.ok and r.text and r.text != '""':
                 return True
         except Exception:
@@ -49,123 +41,94 @@ def _wait_for_leader(host: str = "localhost", port: int = 8500, timeout: int = 3
     return False
 
 
-class Service(BaseService):
+# ───────────────────────── service ───────────────────────────
+class ConsulService(BaseService):
 
-    # ───────────────────────── orchestration ─────────────────────────
-    async def run(self) -> None:
-        """Main service loop."""
+    async def before_run(self) -> None:
+        SECRETS_DIR.mkdir(parents=True, exist_ok=True)
+
+
+    async def run(self) -> None:                         # noqa: D401
         first_launch = not AGENT_TOKEN_FILE.exists()
 
-        # first agent launch
+        # ── initial agent run ───────────────────────────
         if first_launch:
-            self.logger.info("First launch detected → bootstrap phase")
             if not await self._run_consul_once():
                 return
-            if not await self._run_init_consul():
+            if not await self._run_init_script():
                 return
-            await self._stop_subprocess()
+            await self._terminate_subprocess()
 
-        # second (working) agent launch
+        # ── normal agent run ────────────────────────────
         if not await self._run_consul_once():
             return
 
-        # explicit agent token authorization
-        await self._authorize_agent_token()
+        await self._apply_agent_token()
 
-        self.logger.info("Consul agent is up - idle loop")
-        try:
-            while not self._shutdown_event.is_set():
-                await asyncio.sleep(60)
-        finally:
-            await self.stop()
+        # idle loop
+        while not self._shutdown_event.is_set():
+            await asyncio.sleep(60)
 
 
-    # ───────────────────────── sub-helpers ───────────────────────────
+    # ───────────────────── sub-routines ─────────────────────
     async def _run_consul_once(self) -> bool:
-        """Runs the Consul agent once."""
-        cmd = ["consul", "agent", "-config-file=/consul/config/consul.hcl"]
-        self.logger.info("Starting Consul: %s", " ".join(cmd))
-
-        proc = subprocess.Popen(cmd, stdout=sys.stdout, stderr=sys.stderr)
+        self._logger.info("Starting service: %s", " ".join(CONSUL_CMD))
+        proc = subprocess.Popen(CONSUL_CMD)             # noqa: S603,S607
         self.set_subprocess(proc)
 
-        ready = await asyncio.get_event_loop().run_in_executor(None, _wait_for_leader)
+        ready = await asyncio.get_event_loop().run_in_executor(None, wait_for_leader)
         if not ready or proc.poll() is not None:
-            self.logger.error("Consul failed to start (ready=%s, exit=%s)", ready, proc.poll())
+            self._logger.error("Consul failed to start.")
             return False
 
-        self.logger.info("Consul leader ready")
+        self._logger.info("Leader ready.")
         return True
 
 
-    async def _run_init_consul(self) -> bool:
-        """Runs the bootstrap script."""
-        self.logger.info("Running init-consul.py …")
-        res = await asyncio.get_event_loop().run_in_executor(
-            None,
-            lambda: subprocess.run(
-                ["python3", "/consul/config/init-consul.py"],
-                capture_output=True,
-                text=True,
-            ),
-        )
-        for line in res.stdout.splitlines():
-            self.logger.info("[init-consul] %s", line)
-        for line in res.stderr.splitlines():
-            self.logger.error("[init-consul] %s", line)
+    async def _run_init_script(self) -> bool:
+        self._logger.info("Running %s", INIT_SCRIPT.name)
 
-        ok = res.returncode == 0 and AGENT_TOKEN_FILE.exists() and ROOT_TOKEN_JSON.exists()
-        if not ok:
-            self.logger.error("init-consul failed (code=%s)", res.returncode)
+        result = subprocess.run(["python3", str(INIT_SCRIPT)], capture_output=True)
+        
+        for ln in result.stdout.splitlines():
+            self._logger.info("[init] %s", ln)
+        for ln in result.stderr.splitlines():
+            self._logger.error("[init] %s", ln)
+
+        ok = result.returncode == 0 and AGENT_TOKEN_FILE.exists() and ROOT_TOKEN_JSON.exists()
+        if ok:
+            self._logger.info("Bootstrap OK")
+        else:
+            self._logger.error("Failed bootstrap")
         return ok
 
 
-    async def _authorize_agent_token(self) -> None:
-        """Executes `consul acl set-agent-token agent <SecretID>`."""
+    async def _apply_agent_token(self) -> None:
         if not (AGENT_TOKEN_FILE.exists() and ROOT_TOKEN_JSON.exists()):
-            self.logger.error("Token files not found → skip agent authorization")
+            self._logger.warning("Token files missing - skip agent-authorization")
             return
 
-        agent_secret = AGENT_TOKEN_FILE.read_text().strip()
-        try:
-            mgmt_secret = json.loads(ROOT_TOKEN_JSON.read_text())["SecretID"]
-        except Exception as exc:
-            self.logger.error("Cannot read root token: %s", exc)
-            return
-
-        env = os.environ.copy()
+        agent_token = AGENT_TOKEN_FILE.read_text().strip()
+        mgmt_token  = json.loads(ROOT_TOKEN_JSON.read_text())["SecretID"]
 
         cmd = [
             "consul", "acl", "set-agent-token",
-            "-token", mgmt_secret,
-            "agent", agent_secret,
+            "-token", mgmt_token,
+            "agent",  agent_token,
         ]
-
-        self.logger.info("Authorizing Consul agent token …")
-
+        self._logger.info("Applying agent-token …")
         res = await asyncio.get_event_loop().run_in_executor(
-            None, lambda: subprocess.run(cmd, env=env, capture_output=True, text=True)
+            None, lambda: subprocess.run(cmd, capture_output=True, text=True)
         )
-
         if res.returncode == 0:
-            self.logger.info("Agent token applied successfully.")
+            self._logger.info("OK - agent-token applied")
         else:
-            self.logger.error("set-agent-token failed (%s): %s", res.returncode, res.stderr.strip() or "<no stderr>")
+            self._logger.error("Failed authorization - agent-token error: %s", res.stderr.strip() or "<no-stderr>")
 
 
-    async def _stop_subprocess(self) -> None:
-        """Correctly stopping a running consul-agent."""
-        if self._subprocess and self._subprocess.poll() is None:
-            self.logger.info("Stopping first Consul instance …")
-            self._subprocess.send_signal(signal.SIGINT)
-            try:
-                await asyncio.get_event_loop().run_in_executor(None, self._subprocess.wait, 10)
-                self.logger.info("Consul stopped")
-            except Exception:
-                self.logger.warning("Consul didn`t stop in time → killing")
-                self._subprocess.kill()
-        self.set_subprocess(None)
+    async def after_stop(self) -> None:
+        await self._terminate_subprocess()
 
 
 if __name__ == "__main__":
-    asyncio.run(Service().start())
+    asyncio.run(ConsulService().start())
