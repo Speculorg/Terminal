@@ -22,12 +22,11 @@ class EnvSettings(BaseSettings):
 
     TRAEFIK_PORT: int = Field(443, description="Traefik HTTPS entry-point")
 
-    CONSUL_TOKEN_FILE: str = Field("", description="Path to Consul ACL token for the running service")
-    REGISTERING_CONSUL_TOKEN_FILE: str = Field("", description="Token with 'service:write' rights for registration")
-
     SERVICE_NAME: str = Field(..., description="Logical name of the containerised service")
     SERVICE_PORT: int = Field(..., description="Internal port the service listens on")
     SERVICE_TAGS: str = Field("",   description="Comma-separated list of Consul tags")
+
+    CONSUL_HTTP_TOKEN_FILE: str = Field("", description="Path to Consul ACL token for the running service")
 
 
     class Config:

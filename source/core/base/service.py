@@ -99,7 +99,7 @@ class BaseService:
             self._logger.info("Skip Consul self-registration")
             return
 
-        token_path = settings.REGISTERING_CONSUL_TOKEN_FILE
+        token_path = settings.CONSUL_HTTP_TOKEN_FILE
         token = Path(token_path).read_text().strip() if token_path else ""
 
         if not await self._wait_port(settings.CONSUL_HOST, settings.CONSUL_PORT, 20):

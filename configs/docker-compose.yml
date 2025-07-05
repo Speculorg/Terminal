@@ -1,5 +1,5 @@
 # configs\docker-compose.yml
-
+ 
 
 networks:
   net_private:
@@ -38,7 +38,6 @@ services:
       SERVICE_NAME: consul
       SERVICE_PORT: 8500
       SERVICE_TAGS: "core,infra,dns,discovery"
-      CONSUL_TOKEN_FILE: "/consul/secrets/agent_consul_token"
     networks:
       - net_private
     labels:
@@ -75,8 +74,7 @@ services:
       SERVICE_NAME:  vault
       SERVICE_PORT:  8200
       SERVICE_TAGS:  "core,infra,secret"
-      CONSUL_TOKEN_FILE: "/consul/secrets/vault_consul_token"
-      REGISTERING_CONSUL_TOKEN_FILE: "/consul/secrets/registering_consul_token"
+      CONSUL_HTTP_TOKEN_FILE: "/consul/secrets/vault_consul_token"
     networks:
       - net_private
     labels:
@@ -88,6 +86,7 @@ services:
     volumes:
       - vault_data:/vault/file
       - ../source/services/vault/config:/vault/config
+      - ../source/services/vault/secrets:/vault/secrets
       - ../source/services/consul/secrets:/consul/secrets:ro
       - ../source/core:/core:ro
       - ../source/services/vault/app:/app:ro
@@ -115,8 +114,7 @@ services:
       SERVICE_NAME: traefik
       SERVICE_PORT: 443
       SERVICE_TAGS:  "core,infra,proxy"
-      CONSUL_TOKEN_FILE: "/consul/secrets/traefik_consul_token"
-      REGISTERING_CONSUL_TOKEN_FILE: /consul/secrets/registering_consul_token
+      CONSUL_HTTP_TOKEN_FILE: "/consul/secrets/traefik_consul_token"
     command:
       - "--configFile=/etc/traefik/traefik.yml"
     networks:

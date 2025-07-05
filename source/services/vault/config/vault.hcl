@@ -5,8 +5,9 @@ disable_mlock = true
 log_level = "info"
 api_addr = "http://vault:8200"
 
-storage "file" {
-  path = "/vault/file"
+storage "consul" {
+  address = "consul:8500"
+  path    = "vault/"
 }
 
 listener "tcp" {

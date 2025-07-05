@@ -1,4 +1,4 @@
-# source/services/vault/app/main.py
+# source\services\vault\app\main.py
 
 
 from __future__ import annotations
@@ -23,6 +23,8 @@ class VaultService(BaseService):
 
     async def run(self) -> None:                         # noqa: D401
         self._logger.info("Starting service: %s", " ".join(VAULT_CMD))
+
+        await asyncio.sleep(20)
 
         proc = subprocess.Popen(VAULT_CMD)              # noqa: S603,S607
         self.set_subprocess(proc)

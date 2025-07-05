@@ -1,5 +1,5 @@
 # source\services\consul\config\init-consul.py
-
+ 
 
 from __future__ import annotations
 
@@ -20,7 +20,6 @@ CONSUL_ADDR = f"http://{settings.CONSUL_HOST}:{settings.CONSUL_PORT}"
 SECRETS_DIR      = Path("/consul/secrets")
 ROOT_TOKEN_JSON  = SECRETS_DIR / "root_consul_token.json"
 AGENT_TOKEN_FILE = SECRETS_DIR / "agent_consul_token"
-REGISTER_TOKEN   = SECRETS_DIR / "registering_consul_token"
 VAULT_TOKEN      = SECRETS_DIR / "vault_consul_token"
 TRAEFIK_TOKEN    = SECRETS_DIR / "traefik_consul_token"
 POLICIES: Dict[str, Dict] = {
@@ -34,21 +33,15 @@ POLICIES: Dict[str, Dict] = {
         "token_file": AGENT_TOKEN_FILE,
         "desc": "token-for-consul-agent",
     },
-    "register": {
-        "name": "registering-policy",
-        "rules": """
-            agent          "" { policy = "write" }
-            service_prefix "" { policy = "write" }
-            """,
-        "token_file": REGISTER_TOKEN,
-        "desc": "token-for-service-registration",
-    },
     "vault": {
         "name": "vault-policy",
         "rules": """
             key_prefix "vault/" { policy = "write" }
-            service_prefix ""   { policy = "read"  }
-            node_prefix    ""   { policy = "read"  }
+            service    "vault"  { policy = "write" }
+            service_prefix ""   { policy = "write"  }
+            session_prefix ""   { policy = "write" }
+            node_prefix    ""   { policy = "write"  }
+            agent          ""   { policy = "write" }
             """,
         "token_file": VAULT_TOKEN,
         "desc": "token-for-vault",
@@ -56,9 +49,10 @@ POLICIES: Dict[str, Dict] = {
     "traefik": {
         "name": "traefik-policy",
         "rules": """
-            service_prefix "" { policy = "read" }
             node_prefix    "" { policy = "read" }
             query_prefix   "" { policy = "read" }
+            agent          "" { policy = "write" }
+            service_prefix "" { policy = "write" }
             """,
         "token_file": TRAEFIK_TOKEN,
         "desc": "token-for-traefik",

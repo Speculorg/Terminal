@@ -18,7 +18,10 @@ from core.base.settings import settings                       # pylint: disable=
 
 # ─────────────────── constants ────────────────────────────
 VAULT_ADDR = f"http://{settings.VAULT_HOST}:{settings.VAULT_PORT}"
-KEYS_PATH = Path("/vault/config/.vault_keys.json")
+
+SECRETS_DIR      = Path("/vault/secrets")
+ROOT_TOKEN_JSON  = SECRETS_DIR / "root_vault_token.json"
+
 SCHEMA: Dict[str, Dict] = {
     "secrets": {
         "database": {"user": "speculorg", "pass": "speculpwd"},
@@ -75,21 +78,27 @@ def _api(method: str, path: str, token: str | None = None, **kw):
 
 # ──────────────────── workflow ────────────────────────────
 def main() -> None:
+
+    if not SECRETS_DIR.exists():
+        logger.info("SECRETS_DIR not exists: create it ...")
+        SECRETS_DIR.mkdir(parents=True, exist_ok=True)
+        logger.info("Directory created: %s", SECRETS_DIR)
+
     # ensure vault reachable
     state = _wait_vault()
 
     # ── init / save keys ───────────────────────────────
-    if not KEYS_PATH.exists():
+    if not ROOT_TOKEN_JSON.exists():
         if state.get("initialized"):   # keys lost?
             _fatal("Vault already initialised but keys file missing")
         logger.info("Initialising Vault ...")
         res = _api("PUT", "/v1/sys/init", json={"secret_shares": 1, "secret_threshold": 1})
         if res.status_code != 200:
             _fatal("Init error: {res.status_code} {res.text}")
-        KEYS_PATH.write_text(res.text)
-        logger.info("Keys saved -> %s", KEYS_PATH)
+        ROOT_TOKEN_JSON.write_text(res.text)
+        logger.info("Keys saved -> %s", ROOT_TOKEN_JSON)
 
-    with KEYS_PATH.open() as f:
+    with ROOT_TOKEN_JSON.open() as f:
         keys = json.load(f)
 
     root_token = keys["root_token"]
