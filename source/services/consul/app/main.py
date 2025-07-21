@@ -2,7 +2,6 @@
 
 
 from __future__ import annotations
-
 import asyncio
 import json
 import signal
@@ -10,9 +9,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
-
 import requests
-
 sys.path.append("/")
 from core.base.settings import settings
 from core.base.service import BaseService
@@ -23,21 +20,29 @@ SECRETS_DIR             = Path("/consul/secrets")
 AGENT_TOKEN_FILE        = SECRETS_DIR / "agent_consul_token"
 ROOT_TOKEN_JSON         = SECRETS_DIR / "root_consul_token.json"
 INIT_SCRIPT             = Path("/consul/config/init-consul.py")
-CONSUL_CMD              = ["consul", "agent", "-config-file=/consul/config/consul.hcl"]
-LOCAL_LEADER_URL        = f"http://{settings.CONSUL_HOST}:{settings.CONSUL_PORT}/v1/status/leader"
+CONSUL_ENDPOINT = f"{settings.CONSUL_HOST}:{settings.CONSUL_PORT}"
+LEADER_PATH = "/v1/status/leader"
 
 
 # ───────────────────────── helpers ───────────────────────────
-def wait_for_leader(timeout: int = 30) -> bool:
+
+def wait_for_leader(url: str, ca: str, client_cert: str, client_key: str, timeout: int = 60) -> bool:
     deadline = time.time() + timeout
+    last_exc = None
     while time.time() < deadline:
         try:
-            r = requests.get(LOCAL_LEADER_URL, timeout=2)
+            r = requests.get(
+                url,
+                verify=ca,
+                cert=(client_cert, client_key),
+                timeout=2,
+            )
             if r.ok and r.text and r.text != '""':
                 return True
-        except Exception:
-            pass
+        except Exception as e:
+            last_exc = e
         time.sleep(1)
+    print(f"wait_for_leader: timeout, last_status=EXC, last_text={last_exc}")
     return False
 
 
@@ -57,6 +62,7 @@ class ConsulService(BaseService):
                 return
             if not await self._run_init_script():
                 return
+            self._logger.info("Run the restart command ...")
             await self._terminate_subprocess()
 
         # ── normal agent run ────────────────────────────
@@ -72,13 +78,48 @@ class ConsulService(BaseService):
 
     # ───────────────────── sub-routines ─────────────────────
     async def _run_consul_once(self) -> bool:
-        self._logger.info("Starting service: %s", " ".join(CONSUL_CMD))
-        proc = subprocess.Popen(CONSUL_CMD)             # noqa: S603,S607
+        CFG_HTTP  = "/consul/config/consul_http.hcl"
+        CFG_HTTPS = "/consul/config/consul_https.hcl"
+
+        CERTS_OK = (
+            Path("/certs/consul.crt").exists() and
+            Path("/certs/consul.key").exists() and
+            Path("/certs/ca.crt").exists()
+        )
+
+        if CERTS_OK:
+            scheme = "https"
+            port = 8501
+            verify = "/certs/ca.crt"
+            cert = "/certs/consul.crt"
+            key  = "/certs/consul.key"
+            cfg_file   = CFG_HTTPS
+            self._logger.info("Certs OK - using HTTPS")
+        else:
+            scheme = "http"
+            port = 8500
+            verify = False
+            cert = None
+            key = None
+            cfg_file   = CFG_HTTP
+            self._logger.info("Certs missing - using HTTP")
+
+        consul_cmd = ["consul", "agent", f"-config-file={cfg_file}"]
+        self._logger.info("Starting service: %s", " ".join(consul_cmd))
+
+        proc = subprocess.Popen(consul_cmd)     # noqa: S603,S607
         self.set_subprocess(proc)
 
-        ready = await asyncio.get_event_loop().run_in_executor(None, wait_for_leader)
+        await asyncio.sleep(30) 
+
+        loop = asyncio.get_running_loop()
+
+        leader_url = f"{scheme}://consul:{port}/v1/status/leader"
+        ready = await loop.run_in_executor(None, wait_for_leader, leader_url, verify, cert, key)
         if not ready or proc.poll() is not None:
-            self._logger.error("Consul failed to start.")
+            self._logger.error(
+                f"Consul failed to start. Leader not detected by {leader_url}"
+            )
             return False
 
         self._logger.info("Leader ready.")

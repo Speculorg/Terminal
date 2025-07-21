@@ -1,8 +1,7 @@
 # source\services\consul\config\init-consul.py
- 
+
 
 from __future__ import annotations
-
 import json
 import logging
 import sys
@@ -10,7 +9,6 @@ import time
 import requests
 from pathlib import Path
 from typing import Dict
-
 sys.path.append("/")
 from core.base.settings import settings                       # pylint: disable=wrong-import-position
 
@@ -26,9 +24,9 @@ POLICIES: Dict[str, Dict] = {
     "agent": {
         "name": "agent-policy",
         "rules": """
-            agent       ""  { policy = "write" }
-            node_prefix ""  { policy = "write" }
-            service_prefix "" { policy = "read" }
+            agent          "" { policy = "write" }
+            node_prefix    "" { policy = "write" }
+            service_prefix "" { policy = "read"  }
             """,
         "token_file": AGENT_TOKEN_FILE,
         "desc": "token-for-consul-agent",
@@ -38,9 +36,9 @@ POLICIES: Dict[str, Dict] = {
         "rules": """
             key_prefix "vault/" { policy = "write" }
             service    "vault"  { policy = "write" }
-            service_prefix ""   { policy = "write"  }
+            service_prefix ""   { policy = "write" }
             session_prefix ""   { policy = "write" }
-            node_prefix    ""   { policy = "write"  }
+            node_prefix    ""   { policy = "write" }
             agent          ""   { policy = "write" }
             """,
         "token_file": VAULT_TOKEN,
@@ -49,8 +47,8 @@ POLICIES: Dict[str, Dict] = {
     "traefik": {
         "name": "traefik-policy",
         "rules": """
-            node_prefix    "" { policy = "read" }
-            query_prefix   "" { policy = "read" }
+            node_prefix    "" { policy = "read"  }
+            query_prefix   "" { policy = "read"  }
             agent          "" { policy = "write" }
             service_prefix "" { policy = "write" }
             """,
@@ -136,6 +134,18 @@ def main() -> None:
         logger.info("Token saved -> %s", cfg["token_file"])
 
     logger.info("OK - init-consul done")
+    logger.info("60 sec timeout ...")
+    time.sleep(10)
+    logger.info("50 sec ...")
+    time.sleep(10)
+    logger.info("40 sec ...")
+    time.sleep(10)
+    logger.info("30 sec ...")
+    time.sleep(10)
+    logger.info("20 sec ...")
+    time.sleep(10)
+    logger.info("10 sec ...")
+    time.sleep(10)
 
 
 if __name__ == "__main__":

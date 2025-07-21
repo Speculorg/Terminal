@@ -1,4 +1,5 @@
-# source\services\vault\config\vault.hcl
+# source\services\vault\config\vault_http.hcl
+
 
 ui = true
 disable_mlock = true
@@ -7,10 +8,11 @@ api_addr = "http://vault:8200"
 
 storage "consul" {
   address = "consul:8500"
-  path    = "vault/"
+  path = "vault/"
 }
 
 listener "tcp" {
-  address     = "0.0.0.0:8200"
-  tls_disable = true
+  address = "0.0.0.0:8200"
+  tls_disable = 1
 }
+

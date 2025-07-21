@@ -1,32 +1,54 @@
 # source\services\traefik\config\traefik.yml
 
-entryPoints:
-  web:
-    address: ":80"
-  websecure:
-    address: ":443"
+
+global:
+  checkNewVersion: false
+
+
+log:
+  level: INFO
+
 
 api:
   dashboard: true
   insecure: false
 
-providers:
-  docker:
-    endpoint: "unix:///var/run/docker.sock"
-    exposedByDefault: false
-  consulCatalog:
-    endpoint:
-      address: "consul:8500"
-    prefix: "traefik"
-    exposedByDefault: false
 
 ping:
   entryPoint: web
 
-log:
-  level: INFO
 
-accessLog:
-  bufferingSize: 100
-  filters:
-    statusCodes: ["400-499", "500-599"]
+entryPoints:
+  web:
+    address: :80
+    http:
+      redirections:
+        entryPoint:
+          to: websecure
+          scheme: https
+          permanent: true
+  
+  websecure:
+    address: :443
+
+
+tls:
+  certificates:
+    - certFile: /certs/traefik.crt
+      keyFile:  /certs/traefik.key
+
+
+providers:
+  consulCatalog:
+    endpoint:
+      scheme: https
+      address: consul:8501
+      tls:
+        ca:   /certs/ca.crt
+        cert: /certs/traefik.crt
+        key:  /certs/traefik.key
+        insecureSkipVerify: false
+    watch: true
+    exposedByDefault: false
+    prefix: traefik
+

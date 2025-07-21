@@ -2,19 +2,17 @@
 
 
 from __future__ import annotations
-
 import asyncio
 import sys
 import subprocess
 from pathlib import Path
-
 sys.path.append("/")
 from core.base.settings import settings
 from core.base.service import BaseService
-
-VAULT_CMD   = ["vault", "server", "-config=/vault/config/vault.hcl"]
 INIT_SCRIPT = Path("/vault/config/init-vault.py")
 
+
+# ───────────────────────── service ───────────────────────────
 
 class VaultService(BaseService):
 
@@ -22,6 +20,18 @@ class VaultService(BaseService):
 
 
     async def run(self) -> None:                         # noqa: D401
+
+        CFG_HTTP  = "/vault/config/vault_http.hcl"
+        CFG_HTTPS = "/vault/config/vault_https.hcl"
+        CERTS_OK  = (
+            Path("/certs/vault.crt").exists() and 
+            Path("/certs/vault.key").exists() and 
+            Path("/certs/ca.crt").exists()
+        )
+
+        cfg_file = CFG_HTTPS if CERTS_OK else CFG_HTTP
+        VAULT_CMD = ["vault", "server", f"-config={cfg_file}"]
+        
         self._logger.info("Starting service: %s", " ".join(VAULT_CMD))
 
         await asyncio.sleep(20)
