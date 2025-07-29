@@ -3,6 +3,7 @@
 
 global:
   checkNewVersion: false
+  sendAnonymousUsage: false
 
 
 log:
@@ -36,6 +37,10 @@ tls:
   certificates:
     - certFile: /certs/traefik.crt
       keyFile:  /certs/traefik.key
+  options:
+    default:
+      minVersion: VersionTLS12
+      sniStrict:  true
 
 
 providers:
@@ -51,4 +56,4 @@ providers:
     watch: true
     exposedByDefault: false
     prefix: traefik
-
+    refreshInterval: 15s

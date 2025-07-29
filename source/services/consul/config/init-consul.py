@@ -10,16 +10,21 @@ import requests
 from pathlib import Path
 from typing import Dict
 sys.path.append("/")
-from core.base.settings import settings                       # pylint: disable=wrong-import-position
+from core.base.settings import settings # pylint: disable=wrong-import-position
 
 
-# ───────────────────────── constants ────────────────────────────
+# --------------------------------------------------------------------------- #
+#                                   Constants                                 #
+# --------------------------------------------------------------------------- #
 CONSUL_ADDR = f"http://{settings.CONSUL_HOST}:{settings.CONSUL_PORT}"
+
 SECRETS_DIR      = Path("/consul/secrets")
 ROOT_TOKEN_JSON  = SECRETS_DIR / "root_consul_token.json"
+
 AGENT_TOKEN_FILE = SECRETS_DIR / "agent_consul_token"
 VAULT_TOKEN      = SECRETS_DIR / "vault_consul_token"
 TRAEFIK_TOKEN    = SECRETS_DIR / "traefik_consul_token"
+
 POLICIES: Dict[str, Dict] = {
     "agent": {
         "name": "agent-policy",
@@ -58,7 +63,9 @@ POLICIES: Dict[str, Dict] = {
 }
 
 
-# ─────────────────── logging ────────────────────────────
+# --------------------------------------------------------------------------- #
+#                                   Logging                                   #
+# --------------------------------------------------------------------------- #
 logger = logging.getLogger("consul")
 logger.setLevel(logging.INFO)
 handler = logging.StreamHandler(sys.stdout)
@@ -71,8 +78,10 @@ def _fatal(msg: str) -> None:
     sys.exit(1)
 
 
-# ───────────────────── helpers ──────────────────────
-def _wait_leader(timeout: int = 30) -> None:
+# --------------------------------------------------------------------------- #
+#                               Helpers                                       #
+# --------------------------------------------------------------------------- #
+def wait_for_ready(timeout: int = 30) -> None:
     url = f"{CONSUL_ADDR}/v1/status/leader"
     end = time.time() + timeout
     while time.time() < end:
@@ -90,7 +99,9 @@ def _api(method: str, path: str, **kw):
     return requests.request(method, f"{CONSUL_ADDR}{path}", timeout=5, **kw)
 
 
-# ───────────────────── main ─────────────────────────
+# --------------------------------------------------------------------------- #
+#                                   Main                                      #
+# --------------------------------------------------------------------------- #
 def main() -> None:
     SECRETS_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -98,9 +109,9 @@ def main() -> None:
         logger.info("Already exists: agent-token -> nothing to do")
         return
 
-    _wait_leader()
+    wait_for_ready()
 
-    # ── 1. ACL bootstrap ─────────────────────────────
+    # ---------------- ACL bootstrap ----------------
     r = _api("PUT", "/v1/acl/bootstrap")
     if r.status_code != 200:
         _fatal(f"ACL bootstrap failed: {r.status_code} {r.text}")
@@ -111,7 +122,7 @@ def main() -> None:
 
     hdr = {"X-Consul-Token": root_token}
 
-    # ── 2. policies + tokens ─────────────────────────
+    # ---------------- policies + tokens ----------------
     current = {p["Name"] for p in _api("GET", "/v1/acl/policies", headers=hdr).json()}
 
     for name, cfg in POLICIES.items():
@@ -134,22 +145,10 @@ def main() -> None:
         logger.info("Token saved -> %s", cfg["token_file"])
 
     logger.info("OK - init-consul done")
-    logger.info("60 sec timeout ...")
-    time.sleep(10)
-    logger.info("50 sec ...")
-    time.sleep(10)
-    logger.info("40 sec ...")
-    time.sleep(10)
-    logger.info("30 sec ...")
-    time.sleep(10)
-    logger.info("20 sec ...")
-    time.sleep(10)
-    logger.info("10 sec ...")
-    time.sleep(10)
 
 
 if __name__ == "__main__":
     try:
         main()
-    except Exception as exc:           # pylint: disable=broad-except
+    except Exception as exc: # pylint: disable=broad-except
         _fatal(str(exc))

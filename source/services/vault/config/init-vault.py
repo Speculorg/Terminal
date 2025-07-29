@@ -8,234 +8,242 @@ import sys
 import time
 import requests
 from pathlib import Path
-from typing import Dict
+from typing import Final
 sys.path.append("/")
-from core.base.settings import settings # pylint: disable=wrong-import-position
+from core.base.settings import settings # global config
 
 
-# ──────────────── constants ─────────────────
-SECRETS_DIR = Path("/vault/secrets")
-CERTS_DIR   = Path("/certs")
+# --------------------------------------------------------------------------- #
+#                                   Constants                                 #
+# --------------------------------------------------------------------------- #
+VAULT_HOST:           Final[str] = settings.VAULT_HOST
+VAULT_PORT:           Final[int] = settings.VAULT_PORT
 
-ROOT_TOKEN_JSON = SECRETS_DIR / "root_vault_token.json"
+CERTS_DIR:            Final[Path] = Path("/certs")
+SECRETS_DIR:          Final[Path] = Path("/vault/secrets")
+ROOT_TOKEN_JSON:      Final[Path] = SECRETS_DIR / "root_vault_token.json"
 
-SCHEMA: Dict[str, Dict] = {
-    "secrets": {
-        "database": {"user": "speculorg", "pass": "speculpwd"},
-        "rabbitmq": {"user": "guest",     "pass": "guest"},
-        "keycloak": {"user": "admin",     "pass": "admin"},
-    },
-    "policies": {
-        "read-db": '''
-            path "secret/data/database" {
-              capabilities = ["read"]
-            }
-        ''',
-    },
-    "approles": {
-        "db-role": {"policies": ["read-db"], "secret_id_ttl": "0s"},
-    },
+TLS_ENABLED = all((CERTS_DIR / f).exists() for f in ("vault.crt", "vault.key", "ca.crt"))
+VAULT_ADDR = f"{'https' if TLS_ENABLED else 'http'}://{VAULT_HOST}:{VAULT_PORT}"
+
+SESSION = requests.Session()
+SESSION.verify = str(CERTS_DIR / "ca.crt") if TLS_ENABLED else False
+
+WAIT_READY_SEC:       Final[int] = 30
+
+PKI_ROOT_TTL:         Final[str] = "87600h"
+PKI_ROLE_MAX_TTL:     Final[str] = "720h"
+DOMAIN_ROOT:          Final[str] = "speculorg.local"
+
+LEAF_SVCS: Final[dict[str, dict[str, str]]] = {
+    "consul":  {"common_name": f"consul.{DOMAIN_ROOT}",  "alt_names": "server.dc-1.consul,consul,localhost"},
+    "vault":   {"common_name": f"vault.{DOMAIN_ROOT}",   "alt_names": "vault,localhost"},
+    "traefik": {"common_name": f"traefik.{DOMAIN_ROOT}", "alt_names": "traefik,localhost"},
 }
 
-PKI_CFG = {
-    "root_cn": "speculorg.local",
-    "ttl_root": "87600h",
-    "role": {
-        "allowed_domains": "speculorg.local,consul,dc-1.consul,vault,traefik,localhost",
-        "allow_subdomains": True,
-        "allow_bare_domains": True,
-        "allow_glob_domains": True,
-        "max_ttl": "720h",
-    },
-    "leaf": {
-        "consul": {
-            "common_name": "consul.speculorg.local",
-            "alt_names": "server.dc-1.consul,consul,localhost",
-        },
-        "vault": {
-            "common_name": "vault.speculorg.local",
-            "alt_names": "vault,localhost",
-        },
-        "traefik": {
-            "common_name": "traefik.speculorg.local",
-            "alt_names": "traefik,localhost",
-        },
-    },
+SECRETS_KV: Final[dict[str, dict[str, str]]] = {
+    "database": {"user": "speculorg", "pass": "speculpwd"},
+    "rabbitmq": {"user": "guest",     "pass": "guest"},
+    "keycloak": {"user": "admin",     "pass": "admin"},
+}
+
+POLICIES: Final[dict[str, str]] = {
+    "read-db": """
+        path "secret/data/database" {
+          capabilities = ["read"]
+        }
+    """,
+}
+
+APPROLES: Final[dict[str, dict]] = {
+    "db-role": {"policies": ["read-db"], "secret_id_ttl": "0s"},
 }
 
 
-# ──────────────── TLS detection ─────────────
-CERTS_OK = (
-    (CERTS_DIR / "vault.crt").exists() and 
-    (CERTS_DIR / "vault.key").exists() and 
-    (CERTS_DIR / "ca.crt").exists()
-)
-VAULT_SCHEME = "https" if CERTS_OK else "http"
-VAULT_PORT   = settings.VAULT_PORT
-VAULT_HOST   = settings.VAULT_HOST
-VAULT_ADDR   = f"{VAULT_SCHEME}://{VAULT_HOST}:{VAULT_PORT}"
-
-REQUESTS_KWARGS = {}
-if CERTS_OK:
-    REQUESTS_KWARGS['verify'] = str(CERTS_DIR / "ca.crt")
-    # REQUESTS_KWARGS['cert'] = (str(CERTS_DIR / "vault.crt"), str(CERTS_DIR / "vault.key"))
-else:
-    REQUESTS_KWARGS['verify'] = False
-
-
-# ──────────────── logging ──────────────────
-logger = logging.getLogger("vault-init")
+# --------------------------------------------------------------------------- #
+#                                   Logging                                   #
+# --------------------------------------------------------------------------- #
+logger = logging.getLogger("vault")
 logger.setLevel(logging.INFO)
 handler = logging.StreamHandler(sys.stdout)
 if not logger.handlers:
     logger.addHandler(handler)
+
 
 def _fatal(msg: str) -> None:
     logger.error(msg)
     sys.exit(1)
 
 
-# ──────────────── HTTP helpers ─────────────
-def _wait_vault(timeout: int = 60) -> Dict:
+# --------------------------------------------------------------------------- #
+#                               Helpers                                       #
+# --------------------------------------------------------------------------- #
+def wait_for_ready(timeout: int = WAIT_READY_SEC) -> dict:
     url = f"{VAULT_ADDR}/v1/sys/health"
-    end = time.time() + timeout
-    while time.time() < end:
+    deadline = time.time() + timeout
+    while time.time() < deadline:
         try:
-            r = requests.get(url, timeout=3, **REQUESTS_KWARGS)
+            r = SESSION.get(url, timeout=3)
             if r.status_code in (200, 429, 501, 503):
                 return r.json() if r.content else {}
-        except Exception:
+        except requests.RequestException:
             pass
         time.sleep(1)
-    _fatal("Vault not responding")
-
-def _api(method: str, path: str, token: str | None = None, **kw):
-    hdr = {"X-Vault-Token": token} if token else {}
-    all_kwargs = dict(REQUESTS_KWARGS)
-    all_kwargs.update(kw)
-    return requests.request(method, f"{VAULT_ADDR}{path}", headers=hdr, timeout=10, **all_kwargs)
+    _fatal("Vault health endpoint not reachable within %s s", timeout)
 
 
-# ──────────────── PKI helpers ──────────────
-def _ensure_dirs() -> None:
-    for p in (SECRETS_DIR, CERTS_DIR):
-        if not p.exists():
-            p.mkdir(parents=True, exist_ok=True)
-            logger.info("Created dir: %s", p)
+def _api(method: str, path: str, token: str | None = None, **kw) -> requests.Response:
+    headers = {"X-Vault-Token": token} if token else {}
+    return SESSION.request(method, f"{VAULT_ADDR}{path}", headers=headers, timeout=10, **kw)
 
-def _write_file(path: Path, content: str, mode: int = 0o600) -> None:
+
+def write_file(path: Path, content: str) -> None:
     path.write_text(content)
-    path.chmod(mode)
-    logger.info("File written -> %s", path)
+    path.chmod(0o600)
+    logger.info("File saved → %s", path)
 
-def _setup_pki(root_token: str) -> None:
-    """Enable PKI engine, generate CA, role, leaf certs."""
+
+# --------------------------------------------------------------------------- #
+#                                PKI helpers                                  #
+# --------------------------------------------------------------------------- #
+def ensure_pki(root_token: str) -> None:
     mounts = _api("GET", "/v1/sys/mounts", token=root_token).json()
     if "pki/" not in mounts:
-        logger.info("Enabling PKI engine ...")
-        _api("POST", "/v1/sys/mounts/pki",
-             token=root_token, json={"type": "pki"})
-    else:
-        logger.info("PKI engine already enabled, skipping enable step.")
+        logger.info("Enabling PKI secrets engine")
+        _api("POST", "/v1/sys/mounts/pki", token=root_token, json={"type": "pki"})
 
-    # Root CA: create once (check by ca.crt file)
-    ca_crt_path = CERTS_DIR / "ca.crt"
-    if not ca_crt_path.exists():
-        logger.info("Generating Root CA ...")
-        resp = _api("POST", "/v1/pki/root/generate/internal", token=root_token,
-                    json={"common_name": PKI_CFG["root_cn"],
-                          "ttl": PKI_CFG["ttl_root"]})
-        if resp.status_code != 200:
-            _fatal(f"Root CA error: {resp.status_code} {resp.text}")
-        _write_file(ca_crt_path, resp.json()["data"]["certificate"])
+    # root CA
+    ca_path = CERTS_DIR / "ca.crt"
+    if not ca_path.exists():
+        logger.info("Generating root CA")
+        res = _api(
+            "POST",
+            "/v1/pki/root/generate/internal",
+            token=root_token,
+            json={"common_name": DOMAIN_ROOT, "ttl": PKI_ROOT_TTL},
+        )
+        res.raise_for_status()
+        write_file(ca_path, res.json()["data"]["certificate"])
 
-        # Configure issuing URLs (optional)
-        _api("POST", "/v1/pki/config/urls", token=root_token, json={
-            "issuing_certificates": f"{VAULT_ADDR}/v1/pki/ca",
-            "crl_distribution_points": f"{VAULT_ADDR}/v1/pki/crl",
-        })
+        _api(
+            "POST",
+            "/v1/pki/config/urls",
+            token=root_token,
+            json={
+                "issuing_certificates": f"{VAULT_ADDR}/v1/pki/ca",
+                "crl_distribution_points": f"{VAULT_ADDR}/v1/pki/crl",
+            },
+        )
 
-    # Role
-    _api("POST", "/v1/pki/roles/internal", token=root_token,
-         json=PKI_CFG["role"])
-    logger.info("PKI role 'internal' ensured")
+    # role
+    _api(
+        "POST",
+        "/v1/pki/roles/internal",
+        token=root_token,
+        json={
+            "allowed_domains": f"{DOMAIN_ROOT},consul,vault,traefik,localhost",
+            "allow_subdomains": True,
+            "allow_bare_domains": True,
+            "allow_glob_domains": True,
+            "max_ttl": PKI_ROLE_MAX_TTL,
+        },
+    )
 
-    # Leaf certs
-    for name, params in PKI_CFG["leaf"].items():
-        crt_path = CERTS_DIR / f"{name}.crt"
-        key_path = CERTS_DIR / f"{name}.key"
-        if crt_path.exists() and key_path.exists():
+    # leaf certificates
+    for name, params in LEAF_SVCS.items():
+        crt, key = CERTS_DIR / f"{name}.crt", CERTS_DIR / f"{name}.key"
+        if crt.exists() and key.exists():
+            logger.info("Cert for %s already exists - skip", name)
             continue
-        logger.info("Issuing cert -> %s", name)
-        resp = _api("POST", "/v1/pki/issue/internal", token=root_token,
-                    json=params)
-        if resp.status_code != 200:
-            _fatal(f"Leaf cert error ({name}): {resp.status_code} {resp.text}")
-        data = resp.json()["data"]
-        _write_file(crt_path, data["certificate"])
-        _write_file(key_path, data["private_key"])
+
+        logger.info("Issuing certificate for %s", name)
+        res = _api("POST", "/v1/pki/issue/internal", token=root_token, json=params)
+        res.raise_for_status()
+        data = res.json()["data"]
+        write_file(crt, data["certificate"])
+        write_file(key, data["private_key"])
 
 
-# ──────────────── main workflow ─────────────
+# --------------------------------------------------------------------------- #
+#                                   Main                                      #
+# --------------------------------------------------------------------------- #
 def main() -> None:
-    _ensure_dirs()
-    state = _wait_vault()
+    SECRETS_DIR.mkdir(parents=True, exist_ok=True)
+    CERTS_DIR.mkdir(parents=True, exist_ok=True)
 
-    # 1. init
+    state = wait_for_ready()
+
+    # ---------------- init ----------------
     if not ROOT_TOKEN_JSON.exists():
         if state.get("initialized"):
             _fatal("Vault already initialised but root token file missing")
-        logger.info("Initialising Vault ...")
-        res = _api("PUT", "/v1/sys/init",
-                   json={"secret_shares": 1, "secret_threshold": 1})
-        if res.status_code != 200:
-            _fatal(f"Init error: {res.status_code} {res.text}")
-        _write_file(ROOT_TOKEN_JSON, res.text)
-        logger.info("Keys saved -> %s", ROOT_TOKEN_JSON)
 
+        logger.info("Initialising Vault (1/1)")
+        res = _api("PUT", "/v1/sys/init", json={"secret_shares": 1, "secret_threshold": 1})
+        res.raise_for_status()
+        write_file(ROOT_TOKEN_JSON, res.text)
+        state = res.json()
+
+    # keys
     keys = json.loads(ROOT_TOKEN_JSON.read_text())
     root_token = keys["root_token"]
     unseal_key = keys["keys"][0]
 
-    # 2. unseal
-    if state.get("sealed"):
-        logger.info("Unsealing ...")
+    # ---------------- unseal ----------------
+    if state.get("sealed", True):
+        logger.info("Unsealing Vault")
         _api("PUT", "/v1/sys/unseal", json={"key": unseal_key})
 
-    # 3. enable KV v2
+    # ---------------- KV engine ----------------
     mounts = _api("GET", "/v1/sys/mounts", token=root_token).json()
     if "secret/" not in mounts:
-        logger.info("Enabling KV engine ...")
-        _api("POST", "/v1/sys/mounts/secret", token=root_token,
-             json={"type": "kv", "options": {"version": "2"}})
-    else:
-        logger.info("KV engine 'secret/' already enabled, skipping enable step.")
+        logger.info("Enabling KV v2 at secret/")
+        _api(
+            "POST",
+            "/v1/sys/mounts/secret",
+            token=root_token,
+            json={"type": "kv", "options": {"version": "2"}},
+        )
 
-    # 4. write secrets
-    for name, data in SCHEMA["secrets"].items():
-        _api("POST", f"/v1/secret/data/{name}", token=root_token,
-             json={"data": data})
-        logger.info("Secret written -> %s", name)
+    # ---------------- secrets ----------------
+    for path, data in SECRETS_KV.items():
+        _api("POST", f"/v1/secret/data/{path}", token=root_token, json={"data": data})
+        logger.info("Secret %s stored", path)
 
-    # 5. policies
-    for pol, rules in SCHEMA["policies"].items():
-        _api("PUT", f"/v1/sys/policies/acl/{pol}", token=root_token,
-             json={"policy": rules, "name": pol, "type": "service"})
-        logger.info("Policy ensured -> %s", pol)
+    # ---------------- policies ----------------
+    policy_resp = _api("GET", "/v1/sys/policies/acl", token=root_token)
+    policy_dict = policy_resp.json() if policy_resp.ok else {}
+    existing_policies = set(policy_dict.keys()) if isinstance(policy_dict, dict) else set()
 
-    # 6. approles
-    for role, cfg in SCHEMA["approles"].items():
-        _api("POST", f"/v1/auth/approle/role/{role}",
-             token=root_token, json=cfg)
-        logger.info("AppRole ensured -> %s", role)
+    for name, rules in POLICIES.items():
+        if name in existing_policies:
+            logger.info("Policy %s already exists - skip", name)
+            continue
+        _api(
+            "PUT",
+            f"/v1/sys/policies/acl/{name}",
+            token=root_token,
+            json={"policy": rules, "type": "service"},
+        )
+        logger.info("Policy %s created", name)
 
-    # 7. PKI stuff
-    _setup_pki(root_token)
+    # ---------------- AppRoles ----------------
+    for role, cfg in APPROLES.items():
+        role_resp = _api("GET", f"/v1/auth/approle/role/{role}", token=root_token)
+        if role_resp.ok:
+            logger.info("AppRole %s already exists - skip", role)
+            continue
+        _api("POST", f"/v1/auth/approle/role/{role}", token=root_token, json=cfg)
+        logger.info("AppRole %s created", role)
+
+    # ---------------- PKI ----------------
+    ensure_pki(root_token)
 
     logger.info("OK - init-vault done")
+
 
 if __name__ == "__main__":
     try:
         main()
     except Exception as exc:  # pylint: disable=broad-except
-        _fatal(str(exc))
+        _fatal("Fatal: %s", exc)
