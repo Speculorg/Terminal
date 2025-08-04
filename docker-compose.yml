@@ -18,21 +18,21 @@ volumes:
     driver_opts:
       type: none
       o: bind
-      device: ../volumes/consul_data
+      device: ./volumes/consul_data
 
   vault_data:
     driver: local
     driver_opts:
       type: none
       o: bind
-      device: ../volumes/vault_data
+      device: ./volumes/vault_data
 
   certs:
     driver: local
     driver_opts:
       type: none
       o: bind
-      device: ../volumes/certs
+      device: ./volumes/certs
 
 
 services:
@@ -41,9 +41,9 @@ services:
     container_name: Consul
     hostname: consul
     env_file:
-      - ./debug.env
+      - ./develop.env
     build:
-      context: ../source/services/consul
+      context: ./source/services/consul
     environment:
       SERVICE_NAME: consul
       SERVICE_PORT: 8500
@@ -59,11 +59,11 @@ services:
     volumes:
       - consul_data:/consul/data
       - certs:/certs:ro
-      - ../source/services/consul/config:/consul/config:rw
-      - ../source/services/consul/secrets:/consul/secrets
-      - ../source/core:/core:ro
-      - ../source/services/consul/app:/app:ro
-      - ../configs/debug.env:/opt/env/.env:ro
+      - ./source/services/consul/config:/consul/config:rw
+      - ./source/services/consul/secrets:/consul/secrets
+      - ./source/core:/core:ro
+      - ./source/services/consul/app:/app:ro
+      - ./develop.env:/opt/env/.env:ro
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "python3", "/app/healthcheck.py"]
@@ -76,9 +76,9 @@ services:
     container_name: Vault
     hostname: vault
     env_file:
-      - ./debug.env
+      - ./develop.env
     build:
-      context: ../source/services/vault
+      context: ./source/services/vault
     cap_add:
       - IPC_LOCK 
     environment:
@@ -97,12 +97,12 @@ services:
     volumes:
       - vault_data:/vault/file
       - certs:/certs
-      - ../source/services/vault/config:/vault/config
-      - ../source/services/vault/secrets:/vault/secrets
-      - ../source/services/consul/secrets:/consul/secrets:ro
-      - ../source/core:/core:ro
-      - ../source/services/vault/app:/app:ro
-      - ../configs/debug.env:/opt/env/.env:ro
+      - ./source/services/vault/config:/vault/config
+      - ./source/services/vault/secrets:/vault/secrets
+      - ./source/services/consul/secrets:/consul/secrets:ro
+      - ./source/core:/core:ro
+      - ./source/services/vault/app:/app:ro
+      - ./develop.env:/opt/env/.env:ro
     depends_on:
       consul:
         condition: service_healthy
@@ -119,9 +119,9 @@ services:
     container_name: Traefik
     hostname: traefik
     env_file:
-      - ./debug.env
+      - ./develop.env
     build:
-      context: ../source/services/traefik
+      context: ./source/services/traefik
     environment:
       SERVICE_NAME: traefik
       SERVICE_PORT: 443
@@ -143,11 +143,11 @@ services:
       - "traefik.http.routers.traefik.tls=true"
     volumes:
       - certs:/certs:ro
-      - ../source/services/traefik/config:/etc/traefik:ro
-      - ../source/services/consul/secrets:/consul/secrets:ro
-      - ../source/core:/core:ro
-      - ../source/services/traefik/app:/app:ro
-      - ../configs/debug.env:/opt/env/.env:ro
+      - ./source/services/traefik/config:/etc/traefik:ro
+      - ./source/services/consul/secrets:/consul/secrets:ro
+      - ./source/core:/core:ro
+      - ./source/services/traefik/app:/app:ro
+      - ./develop.env:/opt/env/.env:ro
     depends_on:
       consul:
         condition: service_healthy
