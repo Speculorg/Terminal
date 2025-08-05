@@ -4,7 +4,7 @@
 ---
 
 ## [2025.08.05] Запуск docker-compose из корня проекта
-- Переименованы и перемещены файлs:
+- Переименованы и перемещены файлы:
   - `.\configs\debug.env` -> `.\develop.env`
   - `.\configs\docker-compose.yml` -> `.\docker-compose.yml`
 - Удалён каталог `configs\`.
@@ -14,7 +14,7 @@
 - Vault разворачивает собственный PKI (Root CA и leaf certificates).
 - Consul переведён на HTTPS (порт 8501) с ACL и mTLS проверкой клиента.
 - Traefik подключён к ConsulCatalog через mTLS, статический конфиг traefik.yml переработан (TLS-1.2+).
-- Обновлены инициализационные скрипты init-consul.py и init-vault.py - усилена идемпотентность и проверки состояния, параметризованны задержки.
+- Обновлены инициализационные скрипты init-consul.py и init-vault.py - усилена идемпотентность и проверки состояния, параметризованы задержки.
 
 ## [2025.07.06] Vault переведён на Consul backend, унифицированы политики и токены
 - Хранилище Vault переключено на Consul Storage backend, выполнены unseal, записаны KV, политики и approle.
