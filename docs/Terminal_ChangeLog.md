@@ -3,6 +3,22 @@
 
 ---
 
+## [2025.08.24] Рефакторинг каркаса сервиса
+- Каркас сервиса:
+  - Переименовали и провели рефакторинг BaseService -> ContextMicroservice.
+  - ContextMicroservice - теперь это минимальный, чистый контракт.
+  - Добавлены статусы (BOOTSTRAPPING, INITIALIZING, SECURING, TLS_TRANSITION, REGISTERING, RUNNING, PAUSED, DEGRADED, STOPPING, ERROR).
+  - Жизненный цикл, пробы TLS, порты, JSON-файлы состояния, healthchecks, секреты, регистрация - вынесены в отдельные пакеты (SRP/DIP).
+- Core-модули по доменам (runtime, infra, observability, net, settings).
+- Настройки:
+  - Перенесли и упростили settings.py: основной источник окружения - settings.env, дополнительный - docker-compose.
+  - Перенос и выравнивание имён переменных; разделение HTTP/HTTPS портов.
+  - Перенесли `.\develop.env` -> `.\settings.env`
+- Добавили новый том Docker - rintime для хранения временных данных (healthchecks).
+- Упорядочили healthcheck’и: один скрипт /core/runtime/health_check.py для всех контейнеров.
+- main.py consul/vault/traefik переписаны под новый скелет службы.
+- Удалены init-vault.py и init-consul.py, теперь инициализация это часть каркаса ContextMicroservice с реализацией в main.py конкретного сервиса.
+
 ## [2025.08.05] Запуск docker-compose из корня проекта
 - Переименованы и перемещены файлы:
   - `.\configs\debug.env` -> `.\develop.env`

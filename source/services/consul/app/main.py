@@ -2,167 +2,246 @@
 
 
 from __future__ import annotations
+
 import asyncio
 import json
-import signal
+import os
+import ssl
 import subprocess
-import sys
 import time
-import requests
+import http.client
 from pathlib import Path
-sys.path.append("/")
-from core.base.settings import settings
-from core.base.service import BaseService
+from typing import Dict, Optional
 
-# --------------------------------------------------------------------------- #
-#                                   Constants                                 #
-# --------------------------------------------------------------------------- #
-CERTS_DIR              = Path("/certs")
-CONSUL_CERT            = CERTS_DIR / "consul.crt"
-CONSUL_KEY             = CERTS_DIR / "consul.key"
-CA_CERT                = CERTS_DIR / "ca.crt"
-
-CFG_HTTP               = "/consul/config/consul_http.hcl"
-CFG_HTTPS              = "/consul/config/consul_https.hcl"
-INIT_SCRIPT            = Path("/consul/config/init-consul.py")
-
-SECRETS_DIR            = Path("/consul/secrets")
-AGENT_TOKEN_FILE       = SECRETS_DIR / "agent_consul_token"
-ROOT_TOKEN_JSON        = SECRETS_DIR / "root_consul_token.json"
-
-CONSUL_HOST            = settings.CONSUL_HOST
-CONSUL_PORT            = settings.CONSUL_PORT
-
-HEALTH_TIMEOUT_SEC     = 15
-RESTART_DELAY_SEC      = 60
-
-# --------------------------------------------------------------------------- #
-#                               Helpers                                       #
-# --------------------------------------------------------------------------- #
-def consul_url(tls: bool) -> str:
-    scheme = "https" if tls else "http"
-    port   = 8501 if tls else 8500
-    return f"{scheme}://{CONSUL_HOST}:{port}/v1/status/leader"
+from core.base.service import ContextMicroservice
+from core.runtime.status import ServiceStatus
+from core.settings.settings import settings
+from core.net.port import wait_port
 
 
-def wait_for_ready(tls: bool, timeout: int = HEALTH_TIMEOUT_SEC) -> bool:
-    url     = consul_url(tls)
-    verify  = str(CA_CERT) if tls else False
-    cert    = (str(CONSUL_CERT), str(CONSUL_KEY)) if tls else None
-    deadline = time.time() + timeout
+# ───────────────────────────── Paths & Const ─────────────────────────────
+CERTS_DIR = Path("/certs")
+CONSUL_CERT = CERTS_DIR / "consul.crt"
+CONSUL_KEY  = CERTS_DIR / "consul.key"
+CA_CERT     = CERTS_DIR / "ca.crt"
 
-    while time.time() < deadline:
+CFG_HTTP  = "/consul/config/consul_http.hcl"
+CFG_HTTPS = "/consul/config/consul_https.hcl"
+
+SECRETS_DIR       = Path("/consul/secrets")
+SECRETS_DIR.mkdir(parents=True, exist_ok=True)
+
+ROOT_TOKEN_JSON   = SECRETS_DIR / "root_consul_token.json"
+AGENT_TOKEN_FILE  = SECRETS_DIR / "agent_consul_token"
+VAULT_TOKEN_FILE  = SECRETS_DIR / "vault_consul_token"
+TRAEFIK_TOKEN_FILE= SECRETS_DIR / "traefik_consul_token"
+
+# ACL policies -> tokens
+POLICIES: Dict[str, Dict] = {
+    "agent": {
+        "name": "agent-policy",
+        "rules": """
+            agent          "" { policy = "write" }
+            node_prefix    "" { policy = "write" }
+            service_prefix "" { policy = "read"  }
+        """,
+        "token_file": AGENT_TOKEN_FILE,
+        "desc": "token-for-consul-agent",
+    },
+    "vault": {
+        "name": "vault-policy",
+        "rules": """
+            key_prefix "vault/" { policy = "write" }
+            service    "vault"  { policy = "write" }
+            service_prefix ""   { policy = "write" }
+            session_prefix ""   { policy = "write" }
+            node_prefix    ""   { policy = "write" }
+            agent          ""   { policy = "write" }
+        """,
+        "token_file": VAULT_TOKEN_FILE,
+        "desc": "token-for-vault",
+    },
+    "traefik": {
+        "name": "traefik-policy",
+        "rules": """
+            node_prefix    "" { policy = "read"  }
+            query_prefix   "" { policy = "read"  }
+            agent          "" { policy = "write" }
+            service_prefix "" { policy = "write" }
+        """,
+        "token_file": TRAEFIK_TOKEN_FILE,
+        "desc": "token-for-traefik",
+    },
+}
+
+
+# ───────────────────────────── HTTP helpers ─────────────────────────────
+def _http_conn(https: bool) -> http.client.HTTPConnection | http.client.HTTPSConnection:
+    if not https:
+        return http.client.HTTPConnection(settings.CONSUL_HOST, settings.CONSUL_PORT_HTTP, timeout=5)
+    ctx = ssl.create_default_context(cafile=str(CA_CERT)) if CA_CERT.exists() else ssl.create_default_context()
+    return http.client.HTTPSConnection(settings.CONSUL_HOST, settings.CONSUL_PORT_HTTPS, timeout=5, context=ctx)
+
+
+def _api(method: str, path: str, *, token: str | None = None, https: bool = False, body: Optional[dict] = None) -> http.client.HTTPResponse:
+    headers = {"Content-Type": "application/json"}
+    if token:
+        headers["X-Consul-Token"] = token
+    body_bytes = json.dumps(body).encode("utf-8") if body is not None else None
+    conn = _http_conn(https)
+    conn.request(method, path, body=body_bytes, headers=headers)
+    return conn.getresponse()
+
+
+def _leader_ready(https: bool, timeout: float = 30.0) -> bool:
+    end = time.time() + timeout
+    while time.time() < end:
         try:
-            r = requests.get(url, timeout=3, verify=verify, cert=cert)
-            if r.ok and r.text and r.text != '""':
+            resp = _api("GET", "/v1/status/leader", https=https)
+            data = resp.read().decode("utf-8", "ignore").strip()
+            if 200 <= resp.status < 300 and data and data != '""':
                 return True
-        except requests.RequestException:
+        except Exception:
             pass
         time.sleep(1)
     return False
 
 
-def tls_ready() -> bool:
-    return CONSUL_CERT.exists() and CONSUL_KEY.exists() and CA_CERT.exists()
+# ───────────────────────────── Service ─────────────────────────────
+class ConsulService(ContextMicroservice):
+    async def initialize(self) -> None:
+        first_run = not AGENT_TOKEN_FILE.exists()
 
-
-# --------------------------------------------------------------------------- #
-#                                 Main service                                #
-# --------------------------------------------------------------------------- #
-class ConsulService(BaseService):
-
-    async def run(self) -> None:                     # noqa: D401
-        first_launch = not AGENT_TOKEN_FILE.exists()
-
-        # ---------- initial HTTP run --------------------------------------
-        if first_launch:            
-            self._logger.info("This is first launch of Consul")
-            if not await self._run_once(use_tls=False):
+        # 1) bootstrap run (HTTP) if first time
+        if first_run:
+            self._set_status(ServiceStatus.BOOTSTRAPPING, "consul.http.start")
+            if not await self._start_consul(cfg=CFG_HTTP, https=False):
                 return
-            
-            await self._run_init_script()
+            await self._ensure_init_http()
+            time.sleep(30.0)
+            await self._stop_child()
 
-            time.sleep(RESTART_DELAY_SEC)
-            await self._terminate_subprocess()
-        else:
-            self._logger.info("This is not first launch of Consul") 
-
-        # ---------- normal run (TLS если есть) ----------------------------
-        use_tls_now = tls_ready()
-        if not await self._run_once(use_tls=use_tls_now):
+        # 2) normal run (TLS if certs present)
+        use_tls = CONSUL_CERT.exists() and CONSUL_KEY.exists() and CA_CERT.exists()
+        self.svc_set_tls_active(use_tls)
+        cfg = CFG_HTTPS if use_tls else CFG_HTTP
+        self._set_status(ServiceStatus.INITIALIZING, f"consul.start cfg={'https' if use_tls else 'http'}")
+        if not await self._start_consul(cfg=cfg, https=use_tls):
             return
 
+        # 3) set agent token (once we run with agent up)
         await self._apply_agent_token()
 
-        # idle loop
-        while not self._shutdown_event.is_set():
-            await asyncio.sleep(60)
+    async def start(self) -> None:
+        self._set_status(ServiceStatus.RUNNING, "consul.up")
+        while not getattr(self, "_shutdown").is_set():
+            await asyncio.sleep(5)
 
+    # ── helpers ──
+    async def _start_consul(self, *, cfg: str, https: bool) -> bool:
+        cmd = ["consul", "agent", f"-config-file={cfg}"]
+        self.log.info("evt=proc.start app=consul mode=%s cmd=%s", "https" if https else "http", " ".join(cmd))
+        proc = subprocess.Popen(cmd)  # noqa: S603
+        self.proc_attach(proc)
 
-    async def _run_once(self, *, use_tls: bool) -> bool:
-        cfg_file = CFG_HTTPS if use_tls else CFG_HTTP
-        cmd      = ["consul", "agent", f"-config-file={cfg_file}"]
-
-        mode = "TLS" if use_tls else "HTTP"
-        self._logger.info("Starting Consul (%s)", mode)
-        proc = subprocess.Popen(cmd) # noqa: S603,S607
-        self.set_subprocess(proc)
-
-        loop  = asyncio.get_running_loop()
-        ready = await loop.run_in_executor(None, wait_for_ready, use_tls)
-        if not ready or proc.poll() is not None:
-            self._logger.error("Consul failed to start (%s)", mode)
+        # ждем порта + лидера
+        port = settings.CONSUL_PORT_HTTPS if https else settings.CONSUL_PORT_HTTP
+        if not await wait_port(settings.CONSUL_HOST, port, timeout=60.0):
+            self.log.error("evt=wait.port.timeout host=%s port=%s", settings.CONSUL_HOST, port)
             return False
 
-        self._logger.info("Leader ready (%s)", mode)
+        if not await asyncio.get_event_loop().run_in_executor(None, _leader_ready, https):
+            self.log.error("evt=wait.leader.timeout mode=%s", "https" if https else "http")
+            return False
+
+        self.log.info("evt=leader.ready mode=%s", "https" if https else "http")
         return True
 
+    async def _stop_child(self) -> None:
+        if getattr(self, "_child", None) and self._child.poll() is None:
+            self.log.info("evt=proc.stop app=consul")
+            try:
+                self._child.terminate()
+                await asyncio.get_event_loop().run_in_executor(None, self._child.wait, 10)
+            except Exception:
+                try: self._child.kill()
+                except Exception: pass
 
-    async def _run_init_script(self) -> None:
-        self._logger.info("Executing %s", INIT_SCRIPT.name)
-        res = await asyncio.get_event_loop().run_in_executor(
-            None,
-            lambda: subprocess.run( # noqa: S603,S607
-                ["python3", str(INIT_SCRIPT)],
-                capture_output=True,
-                text=True,
-            ),
-        )
-        for line in res.stdout.splitlines():
-            self._logger.info("[init] %s", line)
-        for line in res.stderr.splitlines():
-            self._logger.error("[init] %s", line)
-        if res.returncode != 0:
-            self._logger.error("Init script returned non-zero code %s", res.returncode)
+    async def _ensure_init_http(self) -> None:
+        """ACL bootstrap + policies + tokens (HTTP mode). Idempotent."""
+        # If already bootstrapped (agent token exists) — skip
+        if AGENT_TOKEN_FILE.exists() and ROOT_TOKEN_JSON.exists():
+            self.log.info("evt=init.skip reason=tokens.exist")
+            return
 
+        # Wait HTTP leader
+        if not await asyncio.get_event_loop().run_in_executor(None, _leader_ready, False):
+            self.log.error("evt=init.abort reason=leader.not.ready")
+            return
+
+        # Bootstrap ACL
+        resp = _api("PUT", "/v1/acl/bootstrap", https=False)
+        if resp.status != 200:
+            self.log.error("evt=acl.bootstrap.fail code=%s", resp.status)
+            return
+        body = resp.read().decode("utf-8")
+        ROOT_TOKEN_JSON.write_text(body, encoding="utf-8")
+        root_token = json.loads(body).get("SecretID", "")
+        self.log.info("evt=acl.bootstrap.ok token_saved=%s", ROOT_TOKEN_JSON)
+
+        # Policies list
+        pol_resp = _api("GET", "/v1/acl/policies", token=root_token, https=False)
+        current = set()
+        if 200 <= pol_resp.status < 300:
+            current = {p.get("Name") for p in json.loads(pol_resp.read().decode("utf-8") or "[]") if isinstance(p, dict)}
+
+        # Ensure policies and tokens
+        for name, cfg in POLICIES.items():
+            if cfg["name"] not in current:
+                _api("PUT", "/v1/acl/policy", token=root_token, https=False, body={
+                    "Name": cfg["name"],
+                    "Description": f"auto {name}",
+                    "Rules": cfg["rules"],
+                }).read()
+                self.log.info("evt=policy.create name=%s", cfg["name"])
+            else:
+                self.log.info("evt=policy.exists name=%s", cfg["name"])
+
+            t_resp = _api("PUT", "/v1/acl/token", token=root_token, https=False, body={
+                "Description": cfg["desc"],
+                "Policies": [{"Name": cfg["name"]}],
+            })
+            if 200 <= t_resp.status < 300:
+                secret = json.loads(t_resp.read().decode("utf-8") or "{}").get("SecretID", "")
+                Path(cfg["token_file"]).write_text(secret, encoding="utf-8")
+                self.log.info("evt=token.saved path=%s", cfg["token_file"])
+
+        # done
+        self.log.info("evt=init.ok")
 
     async def _apply_agent_token(self) -> None:
         if not (AGENT_TOKEN_FILE.exists() and ROOT_TOKEN_JSON.exists()):
-            self._logger.warning("Token files missing — skip set-agent-token")
+            self.log.warning("evt=agent.token.skip reason=files.missing")
             return
-
-        agent_token = AGENT_TOKEN_FILE.read_text().strip()
-        mgmt_token  = json.loads(ROOT_TOKEN_JSON.read_text())["SecretID"]
-
-        cmd = [
-            "consul", "acl", "set-agent-token",
-            "-token", mgmt_token,
-            "agent",  agent_token,
-        ]
-        self._logger.info("Applying agent token")
-        res = await asyncio.get_event_loop().run_in_executor(
-            None,
-            lambda: subprocess.run(cmd, capture_output=True, text=True),
-        )
-        if res.returncode == 0:
-            self._logger.info("Agent token applied successfully")
-        else:
-            self._logger.error("set-agent-token error: %s", res.stderr.strip() or "<no-stderr>")
+        try:
+            mgmt_token = json.loads(ROOT_TOKEN_JSON.read_text(encoding="utf-8")).get("SecretID", "")
+            agent_token = AGENT_TOKEN_FILE.read_text(encoding="utf-8").strip()
+            cmd = ["consul", "acl", "set-agent-token", "-token", mgmt_token, "agent", agent_token]
+            self.log.info("evt=consul.set-agent-token")
+            res = await asyncio.get_event_loop().run_in_executor(
+                None, lambda: subprocess.run(cmd, capture_output=True, text=True)
+            )
+            if res.returncode == 0:
+                self.log.info("evt=agent.token.applied")
+            else:
+                self.log.error("evt=agent.token.fail code=%s stderr=%s", res.returncode, res.stderr.strip() or "<empty>")
+        except Exception as exc:  # noqa: BLE001
+            self.log.error("evt=agent.token.error err=%s", exc)
 
 
-    async def after_stop(self) -> None:
-        await self._terminate_subprocess()
+async def main() -> None:
+    await ConsulService().serve()
 
 
 if __name__ == "__main__":
-    asyncio.run(ConsulService().start())
+    asyncio.run(main())

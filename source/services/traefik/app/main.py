@@ -2,35 +2,58 @@
 
 
 from __future__ import annotations
-
 import asyncio
-import sys
+import os
 import subprocess
+from core.base.service import ContextMicroservice
+from core.runtime.status import ServiceStatus
+from core.settings.settings import settings
+from core.net.port import wait_port
+from core.infra.tls import probe_tls
 
-sys.path.append("/")
-from core.base.settings import settings
-from core.base.service import BaseService
 
-TRAEFIK_CMD = ["traefik", "--configFile=/etc/traefik/traefik.yml"]
+TRAEFIK_SCHEME: dict = {
+    "ports": {
+        "http": int(settings.TRAEFIK_PORT_HTTP),
+        "https": int(settings.TRAEFIK_PORT_HTTPS),
+    },
+    "tls_probe": {
+        "host": settings.TRAEFIK_HOST,
+        "require_tls": False,
+        "probe_timeout": 2.0,
+    },
+}
 
 
-class TraefikService(BaseService):
+class TraefikService(ContextMicroservice):
+    async def initialize(self) -> None:
+        cmd = os.getenv("TRAEFIK_CMD", "traefik --configFile=/etc/traefik/traefik.yml").split()
+        self.log.info("evt=proc.start app=traefik cmd=%s", " ".join(cmd))
+        proc = subprocess.Popen(cmd)  # noqa: S603
+        self.proc_attach(proc)
 
-    async def run(self) -> None:                         # noqa: D401
-        self._logger.info("Starting service: %s", " ".join(TRAEFIK_CMD))
+        if not await wait_port(settings.TRAEFIK_HOST, TRAEFIK_SCHEME["ports"]["http"], timeout=60.0):
+            self.log.error("evt=wait.traefik.timeout host=%s port=%s", settings.TRAEFIK_HOST, TRAEFIK_SCHEME["ports"]["http"])
+            return
 
-        proc = subprocess.Popen(TRAEFIK_CMD)            # noqa: S603,S607
-        self.set_subprocess(proc)
+        tls_ok = probe_tls(settings.TRAEFIK_HOST, TRAEFIK_SCHEME["ports"]["https"], timeout=TRAEFIK_SCHEME["tls_probe"]["probe_timeout"])
+        self.svc_set_tls_active(tls_ok)
 
-        await asyncio.sleep(10)
-        await self.register_in_consul()
+        if TRAEFIK_SCHEME["tls_probe"]["require_tls"]:
+            attempts = 0
+            while not tls_ok and attempts < 30:
+                await asyncio.sleep(2.0)
+                tls_ok = probe_tls(settings.TRAEFIK_HOST, TRAEFIK_SCHEME["ports"]["https"], timeout=2.0)
+                attempts += 1
+            self.svc_set_tls_active(tls_ok)
 
-        while not self._shutdown_event.is_set():
-            await asyncio.sleep(60)
+    async def start(self) -> None:
+        self._set_status(ServiceStatus.RUNNING, "traefik.up")
+        while not getattr(self, "_shutdown").is_set():
+            await asyncio.sleep(5)
 
-    async def after_stop(self) -> None:
-        await self._terminate_subprocess()
-
+async def main() -> None:
+    await TraefikService().serve()
 
 if __name__ == "__main__":
-    asyncio.run(TraefikService().start())
+    asyncio.run(main())

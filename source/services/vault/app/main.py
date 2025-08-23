@@ -1,143 +1,284 @@
 # source\services\vault\app\main.py
 
-"""
-Vault service launcher.
-
-Algorithm:
-1. Detect first launch by absence of server certificates.
-2. Run Vault once (HTTP), execute init-script, terminate.
-3. Run Vault again (HTTPS). Apply Consul registration if certificates exist.
-4. Stay alive until SIGTERM/SIGINT.
-The code is idempotent and parameters are grouped in CONSTANTS.
-"""
-
 from __future__ import annotations
 
 import asyncio
-import signal
+import json
+import os
+import ssl
 import subprocess
-import sys
 import time
+import http.client
 from pathlib import Path
+from typing import Final
 
-import requests  # lightweight probe only
-
-sys.path.append("/")
-from core.base.settings import settings          # project-wide configuration
-from core.base.service import BaseService        # common async wrapper
-
-# --------------------------------------------------------------------------- #
-#                                   CONSTANTS                                 #
-# --------------------------------------------------------------------------- #
-CERTS_DIR             = Path("/certs")
-VAULT_CERT            = CERTS_DIR / "vault.crt"
-VAULT_KEY             = CERTS_DIR / "vault.key"
-CA_CERT               = CERTS_DIR / "ca.crt"
-
-CFG_HTTP              = "/vault/config/vault_http.hcl"
-CFG_HTTPS             = "/vault/config/vault_https.hcl"
-INIT_SCRIPT           = Path("/vault/config/init-vault.py")
-
-# Health-check
-VAULT_HOST            = settings.VAULT_HOST
-VAULT_PORT            = settings.VAULT_PORT
-
-HEALTH_TIMEOUT_SEC    = 15
-RESTART_DELAY_SEC     = 60
+from core.base.service import ContextMicroservice
+from core.runtime.status import ServiceStatus
+from core.settings.settings import settings
+from core.net.port import wait_port
 
 
-# --------------------------------------------------------------------------- #
-#                               Helper functions                              #
-# --------------------------------------------------------------------------- #
-def vault_url(path: str, tls: bool) -> str:
-    scheme = "https" if tls else "http"
-    return f"{scheme}://{VAULT_HOST}:{VAULT_PORT}{path}"
+# ───────────────────────────── Paths & Const ─────────────────────────────
+CERTS_DIR: Final[Path] = Path("/certs")
+SECRETS_DIR: Final[Path] = Path("/vault/secrets")
+SECRETS_DIR.mkdir(parents=True, exist_ok=True)
+
+ROOT_TOKEN_JSON: Final[Path] = SECRETS_DIR / "root_vault_token.json"
+
+CFG_HTTP:  Final[str] = "/vault/config/vault_http.hcl"
+CFG_HTTPS: Final[str] = "/vault/config/vault_https.hcl"
+
+CA_PEM  = CERTS_DIR / "ca.crt"
+CRT_VLT = CERTS_DIR / "vault.crt"
+KEY_VLT = CERTS_DIR / "vault.key"
+
+WAIT_HEALTH_SEC: Final[int] = 30
+
+# PKI / domain
+DOMAIN_ROOT: Final[str] = settings.DOMAIN_ROOT
+PKI_ROOT_TTL: Final[str] = "87600h"
+PKI_ROLE_MAX_TTL: Final[str] = "720h"
+
+LEAF_SVCS: Final[dict[str, dict[str, str]]] = {
+    "consul":  {"common_name": f"consul.{DOMAIN_ROOT}",  "alt_names": "server.dc-1.consul,consul,localhost"},
+    "vault":   {"common_name": f"vault.{DOMAIN_ROOT}",   "alt_names": "vault,localhost"},
+    "traefik": {"common_name": f"traefik.{DOMAIN_ROOT}", "alt_names": "traefik,localhost"},
+}
+
+SECRETS_KV: Final[dict[str, dict[str, str]]] = {
+    "database": {"user": "speculorg", "pass": "speculpwd"},
+    "rabbitmq": {"user": "guest",     "pass": "guest"},
+    "keycloak": {"user": "admin",     "pass": "admin"},
+}
+
+POLICIES: Final[dict[str, str]] = {
+    "read-db": """
+        path "secret/data/database" {
+          capabilities = ["read"]
+        }
+    """,
+}
+
+APPROLES: Final[dict[str, dict]] = {
+    "db-role": {"policies": ["read-db"], "secret_id_ttl": "0s"},
+}
 
 
-def wait_for_ready(tls: bool, timeout: int = HEALTH_TIMEOUT_SEC) -> bool:
-    url = vault_url("/v1/sys/health", tls)
-    verify = str(CA_CERT) if tls else False
-    deadline = time.time() + timeout
-    while time.time() < deadline:
+# ───────────────────────────── HTTP helpers ─────────────────────────────
+def _http_conn(https: bool) -> http.client.HTTPConnection | http.client.HTTPSConnection:
+    if not https:
+        return http.client.HTTPConnection(settings.VAULT_HOST, settings.VAULT_PORT_HTTP, timeout=6)
+    ctx = ssl.create_default_context(cafile=str(CA_PEM)) if CA_PEM.exists() else ssl.create_default_context()
+    return http.client.HTTPSConnection(settings.VAULT_HOST, settings.VAULT_PORT_HTTPS, timeout=6, context=ctx)
+
+
+def _api(method: str, path: str, *, token: str | None = None, https: bool = False, body: dict | None = None) -> http.client.HTTPResponse:
+    headers = {"Content-Type": "application/json"}
+    if token:
+        headers["X-Vault-Token"] = token
+    data = json.dumps(body).encode("utf-8") if body is not None else None
+    conn = _http_conn(https)
+    conn.request(method, path, body=data, headers=headers)
+    return conn.getresponse()
+
+
+def _health_ok(https: bool, timeout: float = WAIT_HEALTH_SEC) -> bool:
+    end = time.time() + timeout
+    while time.time() < end:
         try:
-            r = requests.get(url, timeout=3, verify=verify)
-            if r.status_code in (200, 429, 501, 503):
+            resp = _api("GET", "/v1/sys/health", https=https)
+            # 200/429/501/503 — валидные статусы жизненного цикла Vault
+            if resp.status in (200, 429, 501, 503):
                 return True
-        except requests.RequestException:
+        except Exception:
             pass
         time.sleep(1)
     return False
 
 
-# --------------------------------------------------------------------------- #
-#                                 Main service                                #
-# --------------------------------------------------------------------------- #
-class VaultService(BaseService):
+# ───────────────────────────── Service ─────────────────────────────
+class VaultService(ContextMicroservice):
+    async def initialize(self) -> None:
+        first_run = not (CRT_VLT.exists() and CA_PEM.exists())
 
-    async def run(self) -> None:                  # noqa: D401
-        first_launch = not (VAULT_CERT.exists() and CA_CERT.exists())
-
-        # ---------- first (HTTP) run ---------------------------------------
-        if first_launch:
-            self._logger.info("This is first launch of Vault")
-            if not await self._run_once(use_tls=False):
+        # 1) first boot (HTTP), init/unseal + PKI/KV/Policies/AppRoles -> issue leaf certs
+        if first_run:
+            if not await self._start_vault(cfg=CFG_HTTP, https=False):
                 return
-            
-            await self._run_init_script()
-            
-            time.sleep(RESTART_DELAY_SEC)
-            await self._terminate_subprocess()
-        else:
-            self._logger.info("This is not first launch of Vault") 
+            await self._ensure_init_unseal_http()
+            await self._ensure_kv_policies_roles_http()
+            await self._ensure_pki_and_certs_http()
+            await self._stop_child()
 
-        # ---------- normal (TLS) run ---------------------------------------
-        if not await self._run_once(use_tls=True):
+        # 2) normal run (TLS)
+        self._set_status(ServiceStatus.TLS_TRANSITION, "vault.https.start")
+        if not await self._start_vault(cfg=CFG_HTTPS, https=True):
             return
+        self.svc_set_tls_active(True)
 
-        # idle loop
-        while not self._shutdown_event.is_set():
-            await asyncio.sleep(60)
+    async def start(self) -> None:
+        self._set_status(ServiceStatus.RUNNING, "vault.up")
+        while not getattr(self, "_shutdown").is_set():
+            await asyncio.sleep(5)
 
-    
-    async def _run_once(self, *, use_tls: bool) -> bool:
-        cfg_file = CFG_HTTPS if use_tls else CFG_HTTP
-        cmd = ["vault", "server", f"-config={cfg_file}"]
-        time.sleep(15)
-        self._logger.info("Starting Vault (%s)", "TLS" if use_tls else "HTTP")
-        proc = subprocess.Popen(cmd)                                    # noqa: S603,S607
-        self.set_subprocess(proc)
+    # ── helpers ──
+    async def _start_vault(self, *, cfg: str, https: bool) -> bool:
+        cmd = ["vault", "server", f"-config={cfg}"]
+        self.log.info("evt=proc.start app=vault mode=%s cmd=%s", "https" if https else "http", " ".join(cmd))
+        proc = subprocess.Popen(cmd)  # noqa: S603
+        self.proc_attach(proc)
 
-        loop = asyncio.get_running_loop()
-        ready = await loop.run_in_executor(None, wait_for_ready, use_tls)
-        if not ready or proc.poll() is not None:
-            self._logger.error("Vault failed to start (TLS=%s)", use_tls)
+        port = settings.VAULT_PORT_HTTPS if https else settings.VAULT_PORT_HTTP
+        if not await wait_port(settings.VAULT_HOST, port, timeout=60.0):
+            self.log.error("evt=wait.port.timeout host=%s port=%s", settings.VAULT_HOST, port)
             return False
 
-        self._logger.info("Vault is ready (TLS=%s)", use_tls)
+        if not await asyncio.get_event_loop().run_in_executor(None, _health_ok, https):
+            self.log.error("evt=wait.health.timeout mode=%s", "https" if https else "http")
+            return False
+
+        self.log.info("evt=vault.ready mode=%s", "https" if https else "http")
         return True
 
-    
-    async def _run_init_script(self) -> None:
-        self._logger.info("Executing %s", INIT_SCRIPT.name)
-        res = await asyncio.get_event_loop().run_in_executor(
-            None,
-            lambda: subprocess.run(                                   # noqa: S603,S607
-                ["python3", str(INIT_SCRIPT)],
-                capture_output=True,
-                text=True,
-            ),
-        )
-        for line in res.stdout.splitlines():
-            self._logger.info("[init] %s", line)
-        for line in res.stderr.splitlines():
-            self._logger.error("[init] %s", line)
-        if res.returncode != 0:
-            self._logger.error("Init script returned non-zero code %s", res.returncode)
+    async def _stop_child(self) -> None:
+        if getattr(self, "_child", None) and self._child.poll() is None:
+            self.log.info("evt=proc.stop app=vault")
+            try:
+                self._child.terminate()
+                await asyncio.get_event_loop().run_in_executor(None, self._child.wait, 10)
+            except Exception:
+                try: self._child.kill()
+                except Exception: pass
 
-    
-    async def after_stop(self) -> None:
-        await self._terminate_subprocess()
+    # ── init/unseal/kv/policies/pki (HTTP) ──
+    async def _ensure_init_unseal_http(self) -> None:
+        # already initialised?
+        resp = _api("GET", "/v1/sys/health", https=False)
+        data = json.loads(resp.read().decode("utf-8") or "{}")
+        if not ROOT_TOKEN_JSON.exists():
+            if data.get("initialized"):
+                self.log.error("evt=vault.init.missing.root_token_json")
+                return
+            self.log.info("evt=vault.init.start")
+            init = _api("PUT", "/v1/sys/init", https=False, body={"secret_shares": 1, "secret_threshold": 1})
+            if not (200 <= init.status < 300):
+                self.log.error("evt=vault.init.fail code=%s", init.status); return
+            body = init.read().decode("utf-8")
+            ROOT_TOKEN_JSON.write_text(body, encoding="utf-8")
+            self.log.info("evt=vault.init.ok file=%s", ROOT_TOKEN_JSON)
+
+        keys = json.loads(ROOT_TOKEN_JSON.read_text(encoding="utf-8"))
+        root_token = keys.get("root_token", "")
+        unseal_key = (keys.get("keys") or [""])[0]
+
+        # unseal if sealed
+        health = _api("GET", "/v1/sys/health", https=False)
+        hjson = json.loads(health.read().decode("utf-8") or "{}")
+        if hjson.get("sealed", True):
+            self.log.info("evt=vault.unseal.start")
+            res = _api("PUT", "/v1/sys/unseal", https=False, body={"key": unseal_key})
+            if not (200 <= res.status < 300):
+                self.log.error("evt=vault.unseal.fail code=%s", res.status); return
+            self.log.info("evt=vault.unseal.ok")
+
+        # enable approle auth if not enabled
+        auths = _api("GET", "/v1/sys/auth", token=root_token, https=False)
+        amap = json.loads(auths.read().decode("utf-8") or "{}")
+        if "approle/" not in amap:
+            _api("POST", "/v1/sys/auth/approle", token=root_token, https=False, body={"type": "approle"}).read()
+            self.log.info("evt=vault.auth.enable method=approle")
+
+    async def _ensure_kv_policies_roles_http(self) -> None:
+        keys = json.loads(ROOT_TOKEN_JSON.read_text(encoding="utf-8"))
+        root_token = keys.get("root_token", "")
+
+        # KV v2 at secret/
+        mounts = _api("GET", "/v1/sys/mounts", token=root_token, https=False)
+        mjson = json.loads(mounts.read().decode("utf-8") or "{}")
+        if "secret/" not in mjson:
+            _api("POST", "/v1/sys/mounts/secret", token=root_token, https=False,
+                 body={"type": "kv", "options": {"version": "2"}}).read()
+            self.log.info("evt=vault.mount.kv path=secret/")
+
+        # secrets
+        for path, data in SECRETS_KV.items():
+            _api("POST", f"/v1/secret/data/{path}", token=root_token, https=False, body={"data": data}).read()
+            self.log.info("evt=vault.secret.upsert path=%s", path)
+
+        # policies
+        resp = _api("GET", "/v1/sys/policies/acl", token=root_token, https=False)
+        existing = set(json.loads(resp.read().decode("utf-8") or "{}").keys())
+        for name, rules in POLICIES.items():
+            if name in existing:
+                self.log.info("evt=vault.policy.exists name=%s", name)
+                continue
+            _api("PUT", f"/v1/sys/policies/acl/{name}", token=root_token, https=False,
+                 body={"policy": rules, "type": "service"}).read()
+            self.log.info("evt=vault.policy.create name=%s", name)
+
+        # approles
+        for role, cfg in APPROLES.items():
+            chk = _api("GET", f"/v1/auth/approle/role/{role}", token=root_token, https=False)
+            if 200 <= chk.status < 300:
+                self.log.info("evt=vault.approle.exists name=%s", role)
+                continue
+            _api("POST", f"/v1/auth/approle/role/{role}", token=root_token, https=False, body=cfg).read()
+            self.log.info("evt=vault.approle.create name=%s", role)
+
+    async def _ensure_pki_and_certs_http(self) -> None:
+        keys = json.loads(ROOT_TOKEN_JSON.read_text(encoding="utf-8"))
+        root_token = keys.get("root_token", "")
+
+        mounts = _api("GET", "/v1/sys/mounts", token=root_token, https=False)
+        mjson = json.loads(mounts.read().decode("utf-8") or "{}")
+        if "pki/" not in mjson:
+            _api("POST", "/v1/sys/mounts/pki", token=root_token, https=False, body={"type": "pki"}).read()
+            self.log.info("evt=vault.mount.pki path=pki/")
+
+        # root CA
+        if not CA_PEM.exists():
+            self.log.info("evt=vault.pki.root.generate cn=%s", DOMAIN_ROOT)
+            res = _api("POST", "/v1/pki/root/generate/internal", token=root_token, https=False,
+                       body={"common_name": DOMAIN_ROOT, "ttl": PKI_ROOT_TTL})
+            if not (200 <= res.status < 300):
+                self.log.error("evt=vault.pki.root.fail code=%s", res.status); return
+            ca_pem = json.loads(res.read().decode("utf-8") or "{}").get("data", {}).get("certificate", "")
+            CA_PEM.write_text(ca_pem, encoding="utf-8")
+            CA_PEM.chmod(0o644)
+            self.log.info("evt=vault.pki.root.saved path=%s", CA_PEM)
+
+            _api("POST", "/v1/pki/config/urls", token=root_token, https=False, body={
+                "issuing_certificates": f"http://{settings.VAULT_HOST}:{settings.VAULT_PORT_HTTP}/v1/pki/ca",
+                "crl_distribution_points": f"http://{settings.VAULT_HOST}:{settings.VAULT_PORT_HTTP}/v1/pki/crl",
+            }).read()
+
+        # role
+        _api("POST", "/v1/pki/roles/internal", token=root_token, https=False, body={
+            "allowed_domains": f"{DOMAIN_ROOT},consul,vault,traefik,localhost",
+            "allow_subdomains": True,
+            "allow_bare_domains": True,
+            "allow_glob_domains": True,
+            "max_ttl": PKI_ROLE_MAX_TTL,
+        }).read()
+
+        # leafs
+        for name, params in LEAF_SVCS.items():
+            crt, key = CERTS_DIR / f"{name}.crt", CERTS_DIR / f"{name}.key"
+            if crt.exists() and key.exists():
+                self.log.info("evt=vault.pki.leaf.exists name=%s", name); continue
+            self.log.info("evt=vault.pki.issue name=%s cn=%s", name, params.get("common_name"))
+            res = _api("POST", "/v1/pki/issue/internal", token=root_token, https=False, body=params)
+            if not (200 <= res.status < 300):
+                self.log.error("evt=vault.pki.issue.fail name=%s code=%s", name, res.status); continue
+            data = json.loads(res.read().decode("utf-8") or "{}").get("data", {})
+            crt.write_text(data.get("certificate", ""), encoding="utf-8"); crt.chmod(0o644)
+            key.write_text(data.get("private_key", ""), encoding="utf-8");  key.chmod(0o600)
+            self.log.info("evt=vault.pki.leaf.saved name=%s crt=%s key=%s", name, crt, key)
+
+
+async def main() -> None:
+    await VaultService().serve()
 
 
 if __name__ == "__main__":
-    asyncio.run(VaultService().start())
+    asyncio.run(main())

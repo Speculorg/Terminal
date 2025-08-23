@@ -1,4 +1,4 @@
-# configs\docker-compose.yml
+# .\docker-compose.yml
  
 
 networks:
@@ -34,82 +34,94 @@ volumes:
       o: bind
       device: ./volumes/certs
 
+  runtime:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ./volumes/runtime
+
 
 services:
 
   consul:
     container_name: Consul
     hostname: consul
-    env_file:
-      - ./develop.env
     build:
       context: ./source/services/consul
     environment:
-      SERVICE_NAME: consul
+      PYTHONPATH: "/"
+      PYTHONUNBUFFERED: "1"
+      SERVICE_NAME: "consul"
       SERVICE_PORT: 8500
       SERVICE_TAGS: "core,infra,dns,discovery"
+      SERVICE_CONFIG_DIR: "/opt/config"
+      SERVICE_HEALTH_FILE: "/run/terminal/health/consul.json"
     networks:
       - net_private
     labels:
       - "traefik.enable=true"
-      - "traefik.http.routers.consul-ui.rule=Host(`consul.localhost`)"
+      - "traefik.http.routers.consul-ui.rule=Host(`consul.terminal.speculorg.localhost`)"
       - "traefik.http.routers.consul-ui.entrypoints=websecure"
       - "traefik.http.routers.consul-ui.tls=true"
       - "traefik.http.services.consul-ui.loadbalancer.server.port=8500"
     volumes:
       - consul_data:/consul/data
       - certs:/certs:ro
+      - runtime:/run/terminal:rw
+      - ./settings.env:/opt/config/settings.env:ro
       - ./source/services/consul/config:/consul/config:rw
       - ./source/services/consul/secrets:/consul/secrets
       - ./source/core:/core:ro
       - ./source/services/consul/app:/app:ro
-      - ./develop.env:/opt/env/.env:ro
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "python3", "/app/healthcheck.py"]
+      test: ["CMD", "python3", "/core/runtime/health_check.py"]
       interval: 55s
       timeout: 15s
       retries: 3
-      start_period: 55s
+      start_period: 120s
 
   vault:
     container_name: Vault
     hostname: vault
-    env_file:
-      - ./develop.env
     build:
       context: ./source/services/vault
     cap_add:
       - IPC_LOCK 
     environment:
-      SERVICE_NAME:  vault
+      PYTHONPATH: "/"
+      PYTHONUNBUFFERED: "1"
+      SERVICE_NAME:  "vault"
       SERVICE_PORT:  8200
       SERVICE_TAGS:  "core,infra,secret"
+      SERVICE_CONFIG_DIR: "/opt/config"
+      SERVICE_HEALTH_FILE: "/run/terminal/health/vault.json"
       CONSUL_HTTP_TOKEN_FILE: "/consul/secrets/vault_consul_token"
     networks:
       - net_private
     labels:
       - "traefik.enable=true"
-      - "traefik.http.routers.vault-ui.rule=Host(`vault.localhost`)"
+      - "traefik.http.routers.vault-ui.rule=Host(`vault.terminal.speculorg.localhost`)"
       - "traefik.http.routers.vault-ui.entrypoints=websecure"
       - "traefik.http.routers.vault-ui.tls=true"
       - "traefik.http.services.vault-ui.loadbalancer.server.port=8200"
     volumes:
       - vault_data:/vault/file
       - certs:/certs
+      - runtime:/run/terminal:rw
+      - ./settings.env:/opt/config/settings.env:ro
       - ./source/services/vault/config:/vault/config
       - ./source/services/vault/secrets:/vault/secrets
       - ./source/services/consul/secrets:/consul/secrets:ro
       - ./source/core:/core:ro
       - ./source/services/vault/app:/app:ro
-      - ./develop.env:/opt/env/.env:ro
     depends_on:
       consul:
         condition: service_healthy
-    restart:
-      unless-stopped
+    restart: unless-stopped
     healthcheck:
-      test: ["CMD", "python3", "/app/healthcheck.py"]
+      test: ["CMD", "python3", "/core/runtime/health_check.py"]
       interval: 55s
       timeout: 15s
       retries: 3
@@ -118,14 +130,16 @@ services:
   traefik:
     container_name: Traefik
     hostname: traefik
-    env_file:
-      - ./develop.env
     build:
       context: ./source/services/traefik
     environment:
-      SERVICE_NAME: traefik
+      PYTHONPATH: "/"
+      PYTHONUNBUFFERED: "1"
+      SERVICE_NAME: "traefik"
       SERVICE_PORT: 443
       SERVICE_TAGS:  "core,infra,proxy"
+      SERVICE_CONFIG_DIR: "/opt/config"
+      SERVICE_HEALTH_FILE: "/run/terminal/health/traefik.json"
       CONSUL_HTTP_TOKEN_FILE: "/consul/secrets/traefik_consul_token"
     command:
       - "--configFile=/etc/traefik/traefik.yml"
@@ -137,17 +151,18 @@ services:
       - "443:443"
     labels:
       - "traefik.enable=true"
-      - "traefik.http.routers.traefik.rule=Host(`traefik.localhost`)"
+      - "traefik.http.routers.traefik.rule=Host(`traefik.terminal.speculorg.localhost`)"
       - "traefik.http.routers.traefik.entrypoints=websecure"
       - "traefik.http.routers.traefik.service=api@internal"
       - "traefik.http.routers.traefik.tls=true"
     volumes:
       - certs:/certs:ro
+      - runtime:/run/terminal:rw
+      - ./settings.env:/opt/config/settings.env:ro
       - ./source/services/traefik/config:/etc/traefik:ro
       - ./source/services/consul/secrets:/consul/secrets:ro
       - ./source/core:/core:ro
       - ./source/services/traefik/app:/app:ro
-      - ./develop.env:/opt/env/.env:ro
     depends_on:
       consul:
         condition: service_healthy
@@ -155,7 +170,7 @@ services:
         condition: service_healthy
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "python3", "/app/healthcheck.py"]
+      test: ["CMD", "python3", "/core/runtime/health_check.py"]
       interval: 55s
       timeout: 15s
       retries: 3

@@ -3,6 +3,13 @@
 
 ---
 
+## [2025.08.24] ADR-009: Уточнение базовых каркасов и деление ядра
+- Каркас сервиса BaseService упразднён как дублирующий. Теперь используются базовые каркасы ContextMicroservice (service.py), ExternalServiceAdapter (adapter.py) и Module (module.py).
+- Переносён и упрощён `.\settings.py`; унификация ENV и путей.
+- Единый healthcheck-скрипт /core/runtime/health_check.py и формат здоровья.
+- Docker Compose: общие healthchecks, `SERVICE_HEALTH_FILE=/run/terminal/health/<svc>.json`.
+- Структура core/* (runtime/infra/observability/net/settings).
+
 ## [2025.07.21] ADR-008: Внедрение mTLS для внутренних сервисов
 - Для защиты взаимодействия Vault, Consul и Traefik внедрён mTLS.
 - Использован внутренний PKI Vault для генерации и управления сертификатами.
