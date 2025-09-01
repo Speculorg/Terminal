@@ -20,7 +20,7 @@ from core.settings.settings import settings
 from core.runtime.status import ServiceStatus, HealthSnapshot
 from core.runtime.health_io import write_health
 from core.runtime.lifecycle import install_signal_shutdown_flag, Periodic
-from core.observability.log import make_logger
+from core.logging import get_logger
 from core.observability.metrics import registry as metrics_registry
 from core.observability.metrics import Counter, Gauge, Registry
 from core.infra.registrars.base import Registrar
@@ -64,7 +64,7 @@ class ContextMicroservice:
                 tags=list(settings.SERVICE_TAGS),
             )
 
-        self.log = make_logger()
+        self.log = get_logger(settings.SERVICE_NAME or "service")
         self._shutdown = asyncio.Event()
         self._status: ServiceStatus = ServiceStatus.BOOTSTRAPPING
         self._health = HealthSnapshot()
@@ -129,19 +129,19 @@ class ContextMicroservice:
         except Exception as exc:  # noqa: BLE001
             self._m_errors_total.inc(labels={"svc": settings.SERVICE_NAME or "service"})
             self._set_status(ServiceStatus.ERROR, f"fatal:{type(exc).__name__}")
-            self.log.exception("err=unhandled svc=%s exc=%s", settings.SERVICE_NAME or "service", exc)
+            self.log.exception("err=unhandled")
             raise
         finally:
             try:
                 if self.deps.registrar:
                     await self.deps.registrar.deregister()
             except Exception as exc:  # noqa: BLE001
-                self.log.warning("msg=registrar.deregister.failed err=%s", exc)
+                self.log.warning("registrar.deregister.failed", err=exc)
             await self._before_stop()
             await self._write_health_tick()
             await self._tick_health.stop()
             await self._tick_metrics.stop()
-            self.log.info("msg=stopped svc=%s", settings.SERVICE_NAME or "service")
+            self.log.info("stopped")
 
 
     # ───────────────────────────── Health / Status ─────────────────────────────
@@ -168,11 +168,11 @@ class ContextMicroservice:
             "to": st.value,
         })
         self.log.info(
-            "evt=status.change svc=%s st=%s prev=%s tls=%d reason=%s",
-            settings.SERVICE_NAME or "service",
-            st.value, getattr(prev, "value", str(prev)),
-            1 if self._tls_active else 0,
-            ";".join(reasons) if reasons else "-"
+            "evt=status.change",
+            st=st.value,
+            prev=getattr(prev, "value", str(prev)),
+            tls=1 if self._tls_active else 0,
+            reason=";".join(reasons) if reasons else "-",
         )
 
     def svc_health_snapshot(self) -> dict:
@@ -188,7 +188,7 @@ class ContextMicroservice:
         try:
             write_health(self.svc_health_snapshot(), self.deps.health_file)
         except Exception as exc:  # noqa: BLE001
-            self.log.warning("evt=health.write.fail err=%s", exc)
+            self.log.warning("evt=health.write.fail", err=exc)
 
 
     # ───────────────────────────── TLS / URL helpers ─────────────────────────────
@@ -196,7 +196,7 @@ class ContextMicroservice:
     def svc_set_tls_active(self, active: bool) -> None:
         self._tls_active = bool(active)
         self._g_tls_active.set(1.0 if self._tls_active else 0.0, labels={"svc": settings.SERVICE_NAME or "service"})
-        self.log.info("evt=tls.state svc=%s active=%d", settings.SERVICE_NAME or "service", 1 if active else 0)
+        self.log.info("evt=tls.state", active=1 if active else 0)
 
     def svc_url(self, host: str, port_http: int, port_https: int, path: str = "") -> str:
         return build_url(host, port_http, port_https, path, tls=self._tls_active)
@@ -217,17 +217,17 @@ class ContextMicroservice:
     # ───────────────────────────── Shutdown / Signals ─────────────────────────────
 
     def _on_signal(self, sig: signal.Signals) -> None:
-        self.log.info("evt=signal svc=%s sig=%s", settings.SERVICE_NAME or "service", sig.name)
+        self.log.info("evt=signal", sig=sig.name)
 
     async def _before_stop(self) -> None:
         self._set_status(ServiceStatus.STOPPING, "shutdown")
         if self._child and self._child.poll() is None:
-            self.log.info("evt=child.terminate svc=%s", settings.SERVICE_NAME or "service")
+            self.log.info("evt=child.terminate")
             try:
                 self._child.terminate()
                 await asyncio.get_event_loop().run_in_executor(None, self._child.wait, 10)
             except Exception:
-                self.log.warning("evt=child.kill svc=%s", settings.SERVICE_NAME or "service")
+                self.log.warning("evt=child.kill")
                 try:
                     self._child.kill()
                 except Exception:
