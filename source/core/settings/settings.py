@@ -1,182 +1,288 @@
-# source\core\settings\settings.py
-
-
 """
-Speculorg.Terminal settings
-- Данные конфигурации и их загрузка.
+Unified settings loader for Speculorg.Terminal.
+Groups: Domain, Consul, Vault, Traefik, Tls, Pki, Observability,
+ServiceDefaults, Database, Keycloak, RabbitMQ.
 """
 
-from __future__ import annotations
+from dataclasses import dataclass, asdict
+from typing import Any, Optional
 import os
-import re
-from dataclasses import dataclass
-from pathlib import Path
-from typing import Dict, Tuple
+import json
+import hashlib
 
 
-CONFIG_DIR = Path(os.getenv("SERVICE_CONFIG_DIR", "/opt/config"))
-GLOBAL_CFG = CONFIG_DIR / "settings.env"
+# ---------------------------------------------------------------------------
+# Data structures
+# ---------------------------------------------------------------------------
 
-_TRUE = {"1", "true", "yes", "on"}
-_FALSE = {"0", "false", "no", "off"}
-
-
-def _load_kv(path: Path) -> Dict[str, str]:
-    if not path.exists():
-        return {}
-    
-    data: Dict[str, str] = {}
-    for raw in path.read_text(encoding="utf-8").splitlines():
-        line = raw.strip()
-        if not line or line.startswith("#"):
-            continue
-        if line.startswith("export "):
-            line = line[7:].lstrip()
-        if "=" not in line:
-            continue
-        k, v = line.split("=", 1)
-        k = k.strip()
-        v = v.strip()
-        # убираем инлайн-комментарий, если значение не в кавычках
-        if not (v.startswith('"') or v.startswith("'")):
-            pos = v.find(" #")
-            if pos != -1:
-                v = v[:pos].rstrip()
-        if (v.startswith('"') and v.endswith('"')) or (v.startswith("'") and v.endswith("'")):
-            v = v[1:-1]
-        data[k] = v
-    return data
+@dataclass
+class Domain:
+    """Domain configuration."""
+    root: str
+    zone: Optional[str] = None
+    wildcard: Optional[str] = None
 
 
-def _get(map_: Dict[str, str], key: str, default: str) -> str:
-    return os.environ.get(key, map_.get(key, default))
+@dataclass
+class Consul:
+    """Consul service settings."""
+    service_name: str
+    http_addr: str
+    http_port: int
+    https_addr: str
+    https_port: int
+    tls_enabled: bool
 
 
-def _as_bool(v: str, default: bool = False) -> bool:
-    s = str(v).strip().lower()
-    return True if s in _TRUE else False if s in _FALSE else bool(default)
+@dataclass
+class Vault:
+    """Vault settings."""
+    service_name: str
+    http_addr: str
+    http_port: int
+    https_addr: str
+    https_port: int
+    tls_enabled: bool
+    pki_root_path: str
+    pki_int_path: str
+    pki_role_name: str
+    cert_rotate_hours: int
 
 
-def _as_int(v: str, default: int, lo: int = 0, hi: int = 65535) -> int:
-    try:
-        x = int(str(v).strip())
-        if x < lo or x > hi:
-            return default
-        return x
-    except Exception:
-        return default
+@dataclass
+class Traefik:
+    """Traefik reverse proxy settings."""
+    service_name: str
+    http_port: int
+    https_port: int
+    tls_enabled: bool
 
 
-def _as_float(v: str, default: float, lo: float = 0.0) -> float:
-    try:
-        x = float(str(v).strip())
-        return x if x >= lo else default
-    except Exception:
-        return default
+@dataclass
+class Tls:
+    """Shared TLS options."""
+    enabled: bool
+    certs_dir: str
 
 
-def _as_list(v: str) -> Tuple[str, ...]:
-    if not v:
-        return tuple()
-    return tuple(s.strip() for s in v.replace(";", ",").split(",") if s.strip())
+@dataclass
+class Pki:
+    """Public Key Infrastructure defaults."""
+    leaf_ttl_hours: int
+    san_list: list[str]
 
 
-def _as_path(v: str, default: str) -> Path:
-    return Path(v) if v else Path(default)
+@dataclass
+class Observability:
+    """Metrics and dashboards."""
+    prometheus_port: int
+    grafana_port: int
+    scrape_interval: str
 
 
-def _as_duration(v: str, default_seconds: float) -> float:
-    """
-    Парсит "500ms" | "30s" | "5m" | "1h" в секунды (float).
-    Если строка — число, трактуем как секунды.
-    """
-    s = str(v).strip().lower()
-    m = re.match(r"^(\d+(?:\.\d+)?)(ms|s|m|h)$", s)
-    if not m:
-        try:
-            return float(s)
-        except Exception:
-            return default_seconds
-    val, unit = float(m.group(1)), m.group(2)
-    return val / 1000 if unit == "ms" else val if unit == "s" else val * 60 if unit == "m" else val * 3600
+@dataclass
+class ServiceDefaults:
+    """Base defaults for services."""
+    health_dir: str
+    init_timeout_s: int
+    retry_interval_s: int
+    backoff_factor: float
+    max_retry_interval_s: int
 
 
+@dataclass
+class Database:
+    """Database public settings."""
+    service_name: str
+    http_port: int
 
-@dataclass(frozen=True, slots=True)
+
+@dataclass
+class Keycloak:
+    """Keycloak public settings."""
+    service_name: str
+    http_port: int
+
+
+@dataclass
+class RabbitMQ:
+    """RabbitMQ public settings."""
+    service_name: str
+    http_port: int
+
+
+@dataclass
 class Settings:
-    # DOMAIN / NAMESPACES
-    DOMAIN_ROOT: str
-
-    # LOGGING
-    LOG_LEVEL: str
-
-    # DIRECTORIES
-    DIR_CERTS: Path
-    DIR_SECRETS: Path
-
-    # CONSUL
-    CONSUL_HOST: str
-    CONSUL_PORT_HTTP: int
-    CONSUL_PORT_HTTPS: int
-    CONSUL_DC: str
-
-    # VAULT
-    VAULT_HOST: str
-    VAULT_PORT_HTTP: int
-    VAULT_PORT_HTTPS: int  # обычно тот же 8200, оставлен для единообразия
-
-    # TRAEFIK
-    TRAEFIK_HOST: str
-    TRAEFIK_PORT_HTTP: int
-    TRAEFIK_PORT_HTTPS: int
-
-    # SERVICE (задаётся через docker-compose: environment)
-    SERVICE_NAME: str
-    SERVICE_PORT: int
-    SERVICE_TAGS: Tuple[str, ...]
-    SERVICE_CONFIG_DIR: str
-    SERVICE_HEALTH_FILE: str
-    CONSUL_HTTP_TOKEN_FILE: str
-
-    @staticmethod
-    def load() -> "Settings":
-        file_map = _load_kv(GLOBAL_CFG)
-
-        return Settings(
-            # DOMAIN
-            DOMAIN_ROOT=_get(file_map, "DOMAIN_ROOT", "terminal.speculorg.localhost").strip() or "terminal.speculorg.localhost",
-
-            # LOGGING
-            LOG_LEVEL=_get(file_map, "LOG_LEVEL", "INFO"),
-
-            # DIRS
-            DIR_CERTS=_as_path(_get(file_map, "DIR_CERTS", "/certs"), "/certs"),
-            DIR_SECRETS=_as_path(_get(file_map, "DIR_SECRETS", "/secrets"), "/secrets"),
-
-            # CONSUL
-            CONSUL_HOST=_get(file_map, "CONSUL_HOST", "consul"),
-            CONSUL_PORT_HTTP=_as_int(_get(file_map, "CONSUL_PORT_HTTP", "8500"), 8500, 1, 65535),
-            CONSUL_PORT_HTTPS=_as_int(_get(file_map, "CONSUL_PORT_HTTPS", "8501"), 8501, 1, 65535),
-            CONSUL_DC=_get(file_map, "CONSUL_DC", "speculorg-dc"),
-
-            # VAULT
-            VAULT_HOST=_get(file_map, "VAULT_HOST", "vault"),
-            VAULT_PORT_HTTP=_as_int(_get(file_map, "VAULT_PORT_HTTP", "8200"), 8200, 1, 65535),
-            VAULT_PORT_HTTPS=_as_int(_get(file_map, "VAULT_PORT_HTTPS", "8200"), 8200, 1, 65535),
-
-            # TRAEFIK
-            TRAEFIK_HOST=_get(file_map, "TRAEFIK_HOST", "traefik"),
-            TRAEFIK_PORT_HTTP=_as_int(_get(file_map, "TRAEFIK_PORT_HTTP", "80"), 80, 1, 65535),
-            TRAEFIK_PORT_HTTPS=_as_int(_get(file_map, "TRAEFIK_PORT_HTTPS", "443"), 443, 1, 65535),
-
-            # SERVICE (compose environment)
-            SERVICE_NAME=os.getenv("SERVICE_NAME", ""),
-            SERVICE_PORT=_as_int(os.getenv("SERVICE_PORT", "0"), 0, 0, 65535),
-            SERVICE_TAGS=_as_list(os.getenv("SERVICE_TAGS", "")),
-            SERVICE_CONFIG_DIR=os.getenv("SERVICE_CONFIG_DIR", "/opt/config"),
-            SERVICE_HEALTH_FILE=os.getenv("SERVICE_HEALTH_FILE", "no_health_file"),
-            CONSUL_HTTP_TOKEN_FILE=os.getenv("CONSUL_HTTP_TOKEN_FILE", ""),
-        )
+    domain: Domain
+    consul: Consul
+    vault: Vault
+    traefik: Traefik
+    tls: Tls
+    pki: Pki
+    observability: Observability
+    service: ServiceDefaults
+    database: Database
+    keycloak: Keycloak
+    rabbitmq: RabbitMQ
 
 
-settings = Settings.load()
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _parse_bool(value: Optional[str], default: bool = False) -> bool:
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _parse_int(value: Optional[str], default: int = 0) -> int:
+    try:
+        return int(value) if value is not None else default
+    except ValueError:
+        return default
+
+
+def _parse_float(value: Optional[str], default: float = 0.0) -> float:
+    try:
+        return float(value) if value is not None else default
+    except ValueError:
+        return default
+
+
+def _parse_list(value: Optional[str]) -> list[str]:
+    if not value:
+        return []
+    return [item.strip() for item in value.split(",") if item.strip()]
+
+
+def load_env_value(name: str, file_name: str) -> Optional[str]:
+    """Load a value from environment variable or from file path variable."""
+    val = os.getenv(name)
+    if val is not None:
+        return val
+    path = os.getenv(file_name)
+    if path:
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = f.read().strip()
+                return data or None
+        except OSError:
+            return None
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Loading and hashing
+# ---------------------------------------------------------------------------
+
+def load_settings() -> Settings:
+    env = os.environ
+
+    domain = Domain(
+        root=env.get("DOMAIN_ROOT", ""),
+        zone=env.get("DOMAIN_ZONE"),
+        wildcard=env.get("DOMAIN_WILDCARD"),
+    )
+
+    consul = Consul(
+        service_name=env.get("CONSUL_SERVICE_NAME", ""),
+        http_addr=env.get("CONSUL_HTTP_ADDR", ""),
+        http_port=_parse_int(env.get("CONSUL_HTTP_PORT")),
+        https_addr=env.get("CONSUL_HTTPS_ADDR", ""),
+        https_port=_parse_int(env.get("CONSUL_HTTPS_PORT")),
+        tls_enabled=_parse_bool(env.get("CONSUL_TLS_ENABLED")),
+    )
+
+    vault = Vault(
+        service_name=env.get("VAULT_SERVICE_NAME", ""),
+        http_addr=env.get("VAULT_HTTP_ADDR", ""),
+        http_port=_parse_int(env.get("VAULT_HTTP_PORT")),
+        https_addr=env.get("VAULT_HTTPS_ADDR", ""),
+        https_port=_parse_int(env.get("VAULT_HTTPS_PORT")),
+        tls_enabled=_parse_bool(env.get("VAULT_TLS_ENABLED")),
+        pki_root_path=env.get("VAULT_PKI_ROOT_PATH", ""),
+        pki_int_path=env.get("VAULT_PKI_INT_PATH", ""),
+        pki_role_name=env.get("VAULT_PKI_ROLE_NAME", ""),
+        cert_rotate_hours=_parse_int(env.get("VAULT_CERT_ROTATE_HOURS")),
+    )
+
+    traefik = Traefik(
+        service_name=env.get("TRAEFIK_SERVICE_NAME", ""),
+        http_port=_parse_int(env.get("TRAEFIK_HTTP_PORT")),
+        https_port=_parse_int(env.get("TRAEFIK_HTTPS_PORT")),
+        tls_enabled=_parse_bool(env.get("TRAEFIK_TLS_ENABLED")),
+    )
+
+    tls = Tls(
+        enabled=_parse_bool(env.get("TLS_ENABLED")),
+        certs_dir=env.get("TLS_CERTS_DIR", ""),
+    )
+
+    pki = Pki(
+        leaf_ttl_hours=_parse_int(env.get("PKI_LEAF_TTL_HOURS")),
+        san_list=_parse_list(env.get("PKI_SAN_LIST")),
+    )
+
+    observability = Observability(
+        prometheus_port=_parse_int(env.get("OBS_PROMETHEUS_PORT")),
+        grafana_port=_parse_int(env.get("OBS_GRAFANA_PORT")),
+        scrape_interval=env.get("OBS_SCRAPE_INTERVAL", ""),
+    )
+
+    service = ServiceDefaults(
+        health_dir=env.get("SERVICE_HEALTH_DIR", ""),
+        init_timeout_s=_parse_int(env.get("SERVICE_INIT_TIMEOUT_S")),
+        retry_interval_s=_parse_int(env.get("SERVICE_RETRY_INTERVAL_S")),
+        backoff_factor=_parse_float(env.get("SERVICE_BACKOFF_FACTOR")),
+        max_retry_interval_s=_parse_int(env.get("SERVICE_MAX_RETRY_INTERVAL_S")),
+    )
+
+    database = Database(
+        service_name=env.get("DB_SERVICE_NAME", ""),
+        http_port=_parse_int(env.get("DB_HTTP_PORT")),
+    )
+
+    keycloak = Keycloak(
+        service_name=env.get("KC_SERVICE_NAME", ""),
+        http_port=_parse_int(env.get("KC_HTTP_PORT")),
+    )
+
+    rabbitmq = RabbitMQ(
+        service_name=env.get("MQ_SERVICE_NAME", ""),
+        http_port=_parse_int(env.get("MQ_HTTP_PORT")),
+    )
+
+    return Settings(
+        domain=domain,
+        consul=consul,
+        vault=vault,
+        traefik=traefik,
+        tls=tls,
+        pki=pki,
+        observability=observability,
+        service=service,
+        database=database,
+        keycloak=keycloak,
+        rabbitmq=rabbitmq,
+    )
+
+
+def _sorted(obj: Any) -> Any:
+    if isinstance(obj, dict):
+        return {k: _sorted(obj[k]) for k in sorted(obj)}
+    if isinstance(obj, list):
+        return [_sorted(v) for v in obj]
+    return obj
+
+
+def config_hash(settings: Settings) -> str:
+    """Calculate SHA-256 hash from sorted settings dictionary."""
+    data = asdict(settings)
+    canonical = _sorted(data)
+    dumped = json.dumps(canonical, ensure_ascii=False, separators=(",", ":"))
+    return hashlib.sha256(dumped.encode("utf-8")).hexdigest()
+
+
+SETTINGS = load_settings()
+CONFIG_HASH = config_hash(SETTINGS)
