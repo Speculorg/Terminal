@@ -27,22 +27,16 @@ class Domain:
 class Consul:
     """Consul service settings."""
     service_name: str
-    http_addr: str
     http_port: int
-    https_addr: str
     https_port: int
-    tls_enabled: bool
 
 
 @dataclass
 class Vault:
     """Vault settings."""
     service_name: str
-    http_addr: str
     http_port: int
-    https_addr: str
     https_port: int
-    tls_enabled: bool
     pki_root_path: str
     pki_int_path: str
     pki_role_name: str
@@ -55,13 +49,11 @@ class Traefik:
     service_name: str
     http_port: int
     https_port: int
-    tls_enabled: bool
 
 
 @dataclass
 class Tls:
     """Shared TLS options."""
-    enabled: bool
     certs_dir: str
 
 
@@ -187,20 +179,14 @@ def load_settings() -> Settings:
 
     consul = Consul(
         service_name=env.get("CONSUL_SERVICE_NAME", ""),
-        http_addr=env.get("CONSUL_HTTP_ADDR", ""),
         http_port=_parse_int(env.get("CONSUL_HTTP_PORT")),
-        https_addr=env.get("CONSUL_HTTPS_ADDR", ""),
         https_port=_parse_int(env.get("CONSUL_HTTPS_PORT")),
-        tls_enabled=_parse_bool(env.get("CONSUL_TLS_ENABLED")),
     )
 
     vault = Vault(
         service_name=env.get("VAULT_SERVICE_NAME", ""),
-        http_addr=env.get("VAULT_HTTP_ADDR", ""),
         http_port=_parse_int(env.get("VAULT_HTTP_PORT")),
-        https_addr=env.get("VAULT_HTTPS_ADDR", ""),
         https_port=_parse_int(env.get("VAULT_HTTPS_PORT")),
-        tls_enabled=_parse_bool(env.get("VAULT_TLS_ENABLED")),
         pki_root_path=env.get("VAULT_PKI_ROOT_PATH", ""),
         pki_int_path=env.get("VAULT_PKI_INT_PATH", ""),
         pki_role_name=env.get("VAULT_PKI_ROLE_NAME", ""),
@@ -211,11 +197,9 @@ def load_settings() -> Settings:
         service_name=env.get("TRAEFIK_SERVICE_NAME", ""),
         http_port=_parse_int(env.get("TRAEFIK_HTTP_PORT")),
         https_port=_parse_int(env.get("TRAEFIK_HTTPS_PORT")),
-        tls_enabled=_parse_bool(env.get("TRAEFIK_TLS_ENABLED")),
     )
 
     tls = Tls(
-        enabled=_parse_bool(env.get("TLS_ENABLED")),
         certs_dir=env.get("TLS_CERTS_DIR", ""),
     )
 

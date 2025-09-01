@@ -40,6 +40,13 @@ volumes:
       type: none
       o: bind
       device: ./volumes/runtime
+      
+  db_data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ./volumes/db_data
 
 
 services:
@@ -176,3 +183,20 @@ services:
       retries: 3
       start_period: 55s
 
+
+  database:
+    container_name: Database
+    hostname: database
+    image: postgres:16
+    networks:
+      - net_private
+    ports:
+      - "5432:5432"
+    volumes:
+      - db_data:/var/lib/postgresql/data
+      - certs:/certs:ro
+      - runtime:/run/terminal:rw
+      - ./settings.env:/opt/config/settings.env:ro
+    restart: unless-stopped
+
+    
