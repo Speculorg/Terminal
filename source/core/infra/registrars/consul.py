@@ -5,7 +5,7 @@ from __future__ import annotations
 import http.client, json
 from typing import Sequence
 
-from core.settings.settings import settings
+from core.settings.settings import SETTINGS
 from core.infra.secrets import read_token_from_envfile
 from core.net.port import wait_port
 from core.infra.registrars.base import Registrar
@@ -21,7 +21,7 @@ class ConsulRegistrar(Registrar):
         self.tags = list(tags)
 
     async def register(self) -> None:
-        ok = await wait_port(settings.CONSUL_HOST, settings.CONSUL_PORT_HTTP, timeout=20.0)
+        ok = await wait_port(SETTINGS.consul.host, SETTINGS.consul.http_port, timeout=20.0)
         if not ok:
             return
         headers = {"Content-Type": "application/json"}
@@ -33,10 +33,10 @@ class ConsulRegistrar(Registrar):
             "Name": self.name,
             "Port": self.port,
             "Tags": self.tags,
-            "Meta": {"domain": settings.DOMAIN_ROOT},
+            "Meta": {"domain": SETTINGS.domain.root},
             "EnableTagOverride": False,
         }
-        conn = http.client.HTTPConnection(settings.CONSUL_HOST, settings.CONSUL_PORT_HTTP, timeout=5)
+        conn = http.client.HTTPConnection(SETTINGS.consul.host, SETTINGS.consul.http_port, timeout=5)
         try:
             conn.request("PUT", "/v1/agent/service/register", body=json.dumps(payload), headers=headers)
             conn.getresponse()  # ignore body; rely on logs/health
@@ -51,7 +51,7 @@ class ConsulRegistrar(Registrar):
         token = read_token_from_envfile("CONSUL_HTTP_TOKEN_FILE")
         if token:
             headers["X-Consul-Token"] = token
-        conn = http.client.HTTPConnection(settings.CONSUL_HOST, settings.CONSUL_PORT_HTTP, timeout=5)
+        conn = http.client.HTTPConnection(SETTINGS.consul.host, SETTINGS.consul.http_port, timeout=5)
         try:
             conn.request("PUT", f"/v1/agent/service/deregister/{self.service_id}", headers=headers)
             conn.getresponse()

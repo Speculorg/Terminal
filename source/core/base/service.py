@@ -1,10 +1,8 @@
-# source\core\base\service.py
-
-
+# source/core/base/service.py
 """
 Speculorg.Terminal.Core.Base.ContextMicroservice
 - Контракт жизненного цикла микросервиса.
-- Делегирует инфраструктуру в подсистемы (registrars, net, tls, secrets).
+- Делегирует инфраструктуру в подсистемы.
 """
 
 from __future__ import annotations
@@ -12,11 +10,11 @@ import asyncio
 import os
 import signal
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
-from core.settings.settings import settings
+from core.settings.settings import SETTINGS
 from core.runtime.status import ServiceStatus, HealthSnapshot
 from core.runtime.health_io import write_health
 from core.runtime.lifecycle import install_signal_shutdown_flag, Periodic
@@ -55,16 +53,25 @@ class ContextMicroservice:
     def __init__(self, deps: Optional[ContextMicroserviceDeps] = None) -> None:
         self.deps = deps or ContextMicroserviceDeps()
 
-        svc = (settings.SERVICE_NAME or "").lower()
-        if self.deps.registrar is None and svc not in {"consul", "vault"}:
+        # Идентичность сервиса: пока берём из переменных окружения,
+        # которые задаёт compose (SERVICE_NAME/PORT/TAGS).
+        # Эти поля не входят в SETTINGS по дизайну.
+        self._svc_name: str = os.getenv("SERVICE_NAME", "service")
+        self._svc_port: int = int(os.getenv("SERVICE_PORT", "0") or 0)
+        raw_tags = os.getenv("SERVICE_TAGS", "")
+        self._svc_tags: list[str] = [t for t in (x.strip() for x in raw_tags.split(",")) if t]
+
+        # Если регистратор не передан — по умолчанию используем ConsulRegistrar,
+        # кроме инфраструктурных базовых сервисов (consul/vault), где своё управление.
+        if self.deps.registrar is None and self._svc_name not in {"consul", "vault"}:
             self.deps.registrar = ConsulRegistrar(
-                service_id=settings.SERVICE_NAME or "service",
-                name=settings.SERVICE_NAME or "service",
-                port=int(settings.SERVICE_PORT or 0),
-                tags=list(settings.SERVICE_TAGS),
+                service_id=self._svc_name or "service",
+                name=self._svc_name or "service",
+                port=self._svc_port,
+                tags=list(self._svc_tags),
             )
 
-        self.log = get_logger(settings.SERVICE_NAME or "service")
+        self.log = get_logger(self._svc_name)
         self._shutdown = asyncio.Event()
         self._status: ServiceStatus = ServiceStatus.BOOTSTRAPPING
         self._health = HealthSnapshot()
@@ -83,7 +90,6 @@ class ContextMicroservice:
         self._tick_health = Periodic(self.write_health_every_sec, self._write_health_tick)
         self._tick_metrics = Periodic(self.update_metrics_every_sec, self._update_metrics_tick)
 
-
     # ───────────────────────────── Переопределяемые хуки ─────────────────────────────
 
     async def initialize(self) -> None:
@@ -97,14 +103,13 @@ class ContextMicroservice:
         self._set_status(ServiceStatus.PAUSED, "pause")
 
     async def restart(self) -> None:
-        self._m_restarts_total.inc(labels={"svc": settings.SERVICE_NAME or "service"})
+        self._m_restarts_total.inc(labels={"svc": self._svc_name})
         self._set_status(ServiceStatus.TLS_TRANSITION, "restart requested")
         os._exit(95)  # управляемый рестарт контейнера
 
     async def stop(self) -> None:
         self._set_status(ServiceStatus.STOPPING, "stop requested")
         self._shutdown.set()
-
 
     # ───────────────────────────── Оркестратор ─────────────────────────────
 
@@ -127,7 +132,7 @@ class ContextMicroservice:
             await self.start()
 
         except Exception as exc:  # noqa: BLE001
-            self._m_errors_total.inc(labels={"svc": settings.SERVICE_NAME or "service"})
+            self._m_errors_total.inc(labels={"svc": self._svc_name})
             self._set_status(ServiceStatus.ERROR, f"fatal:{type(exc).__name__}")
             self.log.exception("err=unhandled")
             raise
@@ -142,7 +147,6 @@ class ContextMicroservice:
             await self._tick_health.stop()
             await self._tick_metrics.stop()
             self.log.info("stopped")
-
 
     # ───────────────────────────── Health / Status ─────────────────────────────
 
@@ -163,7 +167,7 @@ class ContextMicroservice:
         if reasons:
             h.reasons = tuple(reasons)
         self._m_status_changes.inc(labels={
-            "svc": settings.SERVICE_NAME or "service",
+            "svc": self._svc_name,
             "from": prev.value if isinstance(prev, ServiceStatus) else str(prev),
             "to": st.value,
         })
@@ -178,8 +182,8 @@ class ContextMicroservice:
     def svc_health_snapshot(self) -> dict:
         snap = self._health.to_dict()
         snap.update({
-            "service": settings.SERVICE_NAME,
-            "domain": settings.DOMAIN_ROOT,
+            "service": self._svc_name,
+            "domain": SETTINGS.domain.root,  # ← берём из SETTINGS
             "tls_active": self._tls_active,
         })
         return snap
@@ -190,29 +194,27 @@ class ContextMicroservice:
         except Exception as exc:  # noqa: BLE001
             self.log.warning("evt=health.write.fail", err=exc)
 
-
     # ───────────────────────────── TLS / URL helpers ─────────────────────────────
 
     def svc_set_tls_active(self, active: bool) -> None:
         self._tls_active = bool(active)
-        self._g_tls_active.set(1.0 if self._tls_active else 0.0, labels={"svc": settings.SERVICE_NAME or "service"})
+        self._g_tls_active.set(1.0 if self._tls_active else 0.0, labels={"svc": self._svc_name})
         self.log.info("evt=tls.state", active=1 if active else 0)
 
     def svc_url(self, host: str, port_http: int, port_https: int, path: str = "") -> str:
         return build_url(host, port_http, port_https, path, tls=self._tls_active)
 
     def svc_fqdn(self, name: str) -> str:
-        return fqdn(name, settings.DOMAIN_ROOT)
-
+        # FQDN строим на основе DOMAIN_ROOT из SETTINGS
+        return fqdn(name, SETTINGS.domain.root)
 
     # ───────────────────────────── Metrics helpers ─────────────────────────────
 
     async def _update_metrics_tick(self) -> None:
-        self._g_uptime_seconds.set(self._uptime_seconds(), labels={"svc": settings.SERVICE_NAME or "service"})
+        self._g_uptime_seconds.set(self._uptime_seconds(), labels={"svc": self._svc_name})
 
     def metrics_text(self) -> str:
         return self._mx.render_prometheus()
-
 
     # ───────────────────────────── Shutdown / Signals ─────────────────────────────
 
@@ -235,7 +237,6 @@ class ContextMicroservice:
 
     def proc_attach(self, popen) -> None:
         self._child = popen
-
 
     # ───────────────────────────── Internals ─────────────────────────────
 

@@ -1,5 +1,3 @@
-# .\docker-compose.yml
- 
 
 networks:
 
@@ -12,6 +10,20 @@ networks:
 
 
 volumes:
+
+  runtime:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ./volumes/runtime
+
+  certs:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ./volumes/certs
 
   consul_data:
     driver: local
@@ -26,20 +38,6 @@ volumes:
       type: none
       o: bind
       device: ./volumes/vault_data
-
-  certs:
-    driver: local
-    driver_opts:
-      type: none
-      o: bind
-      device: ./volumes/certs
-
-  runtime:
-    driver: local
-    driver_opts:
-      type: none
-      o: bind
-      device: ./volumes/runtime
       
   db_data:
     driver: local
@@ -56,11 +54,13 @@ services:
     hostname: consul
     build:
       context: ./source/services/consul
+    env_file:
+      - ./settings.env
     environment:
       PYTHONPATH: "/"
       PYTHONUNBUFFERED: "1"
-      SERVICE_NAME: "consul"
-      SERVICE_PORT: 8500
+      SERVICE_NAME: consul #${CONSUL_HOST}
+      SERVICE_PORT: 8501 #${CONSUL_HTTPS_PORT}
       SERVICE_TAGS: "core,infra,dns,discovery"
       SERVICE_CONFIG_DIR: "/opt/config"
       SERVICE_HEALTH_FILE: "/run/terminal/health/consul.json"
@@ -71,12 +71,11 @@ services:
       - "traefik.http.routers.consul-ui.rule=Host(`consul.terminal.speculorg.localhost`)"
       - "traefik.http.routers.consul-ui.entrypoints=websecure"
       - "traefik.http.routers.consul-ui.tls=true"
-      - "traefik.http.services.consul-ui.loadbalancer.server.port=8500"
+      - "traefik.http.services.consul-ui.loadbalancer.server.port=8501"
     volumes:
       - consul_data:/consul/data
       - certs:/certs:ro
       - runtime:/run/terminal:rw
-      - ./settings.env:/opt/config/settings.env:ro
       - ./source/services/consul/config:/consul/config:rw
       - ./source/services/consul/secrets:/consul/secrets
       - ./source/core:/core:ro
@@ -96,12 +95,14 @@ services:
       context: ./source/services/vault
     cap_add:
       - IPC_LOCK 
+    env_file:
+      - ./settings.env
     environment:
       PYTHONPATH: "/"
       PYTHONUNBUFFERED: "1"
-      SERVICE_NAME:  "vault"
-      SERVICE_PORT:  8200
-      SERVICE_TAGS:  "core,infra,secret"
+      SERVICE_NAME: vault #${VAULT_HOST}
+      SERVICE_PORT: 8200 #${VAULT_HTTPS_PORT}
+      SERVICE_TAGS: "core,infra,secret"
       SERVICE_CONFIG_DIR: "/opt/config"
       SERVICE_HEALTH_FILE: "/run/terminal/health/vault.json"
       CONSUL_HTTP_TOKEN_FILE: "/consul/secrets/vault_consul_token"
@@ -117,7 +118,6 @@ services:
       - vault_data:/vault/file
       - certs:/certs
       - runtime:/run/terminal:rw
-      - ./settings.env:/opt/config/settings.env:ro
       - ./source/services/vault/config:/vault/config
       - ./source/services/vault/secrets:/vault/secrets
       - ./source/services/consul/secrets:/consul/secrets:ro
@@ -139,11 +139,13 @@ services:
     hostname: traefik
     build:
       context: ./source/services/traefik
+    env_file:
+      - ./settings.env
     environment:
       PYTHONPATH: "/"
       PYTHONUNBUFFERED: "1"
-      SERVICE_NAME: "traefik"
-      SERVICE_PORT: 443
+      SERVICE_NAME: traefik #${TRAEFIK_HOST}
+      SERVICE_PORT: 443 #${TRAEFIK_HTTPS_PORT}
       SERVICE_TAGS:  "core,infra,proxy"
       SERVICE_CONFIG_DIR: "/opt/config"
       SERVICE_HEALTH_FILE: "/run/terminal/health/traefik.json"
@@ -165,7 +167,6 @@ services:
     volumes:
       - certs:/certs:ro
       - runtime:/run/terminal:rw
-      - ./settings.env:/opt/config/settings.env:ro
       - ./source/services/traefik/config:/etc/traefik:ro
       - ./source/services/consul/secrets:/consul/secrets:ro
       - ./source/core:/core:ro
@@ -182,21 +183,3 @@ services:
       timeout: 15s
       retries: 3
       start_period: 55s
-
-
-  database:
-    container_name: Database
-    hostname: database
-    image: postgres:16
-    networks:
-      - net_private
-    ports:
-      - "5432:5432"
-    volumes:
-      - db_data:/var/lib/postgresql/data
-      - certs:/certs:ro
-      - runtime:/run/terminal:rw
-      - ./settings.env:/opt/config/settings.env:ro
-    restart: unless-stopped
-
-    

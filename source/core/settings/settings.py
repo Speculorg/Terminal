@@ -1,272 +1,316 @@
 """
-Unified settings loader for Speculorg.Terminal.
-Groups: Domain, Consul, Vault, Traefik, Tls, Pki, Observability,
-ServiceDefaults, Database, Keycloak, RabbitMQ.
+Speculorg.Terminal :: core.settings.settings
+
+Назначение:
+- Считать параметры окружения (settings.env), привести типы, задать дефолты.
+- Построить производные значения (например, SAN-список для mTLS на базе DOMAIN_ROOT).
+- Предоставить единый API:
+    SETTINGS     - неизменяемая (по договорённости) структура настроек.
+    CONFIG_HASH  - детерминированный SHA-256 по значимым (несекретным) полям.
+
+Принципы:
+- Только стандартная библиотека (Python 3.12).
+- Никаких секретов: пароли/токены/DSN здесь не читаются.
+- Код приложения использует ТОЛЬКО SETTINGS (никаких os.environ прямо).
+- Константы исполнения (например, PYTHONUNBUFFERED/PYTHONPATH) - в compose/Dockerfile.
+
+Группы:
+- Domain, Paths, Timeouts, Consul, Vault, Traefik, Database, Observability, Policy.
 """
 
-from dataclasses import dataclass, asdict
-from typing import Any, Optional
-import os
-import json
+from __future__ import annotations
+
 import hashlib
+import json
+import os
+from dataclasses import asdict, dataclass
+from typing import Any, Dict, List, Mapping
 
 
-# ---------------------------------------------------------------------------
-# Data structures
-# ---------------------------------------------------------------------------
+# ----------------------------
+# Helpers: env parsing & utils
+# ----------------------------
 
-@dataclass
+def _env_str(name: str, default: str) -> str:
+    v = os.getenv(name)
+    return v if v is not None and v != "" else default
+
+
+def _env_int(name: str, default: int) -> int:
+    v = os.getenv(name)
+    if v is None or v.strip() == "":
+        return default
+    try:
+        return int(v.strip())
+    except ValueError:
+        return default
+
+
+def _env_float(name: str, default: float) -> float:
+    v = os.getenv(name)
+    if v is None or v.strip() == "":
+        return default
+    try:
+        return float(v.strip())
+    except ValueError:
+        return default
+
+
+def _env_duration_like(name: str, default: str) -> str:
+    """
+    Возвращает строку-интервал (например, '15s', '1m'). Валидатор намеренно простой:
+    ответственность за формат - на вызывающей стороне (Prometheus и т.п.).
+    """
+    v = os.getenv(name)
+    return v.strip() if v else default
+
+
+def read_env_or_file(name: str, file_name: str) -> str | None:
+    """
+    Read key:value from plain ENV or from path pointed by *_FILE env var.
+    Возвращает None, если не найдено.
+    """
+    v = os.getenv(name)
+    if v:
+        return v
+    p = os.getenv(file_name)
+    if not p:
+        return None
+    try:
+        with open(p, "r", encoding="utf-8") as f:
+            return f.read().strip()
+    except OSError:
+        return None
+
+
+# ----------------------------
+# Dataclasses for settings
+# ----------------------------
+
+@dataclass(frozen=True)
 class Domain:
-    """Domain configuration."""
     root: str
-    zone: Optional[str] = None
-    wildcard: Optional[str] = None
 
 
-@dataclass
-class Consul:
-    """Consul service settings."""
-    service_name: str
-    http_port: int
-    https_port: int
+@dataclass(frozen=True)
+class Paths:
+    tls_certs_dir: str
+    service_health_dir: str
 
 
-@dataclass
-class Vault:
-    """Vault settings."""
-    service_name: str
-    http_port: int
-    https_port: int
-    pki_root_path: str
-    pki_int_path: str
-    pki_role_name: str
-    cert_rotate_hours: int
-
-
-@dataclass
-class Traefik:
-    """Traefik reverse proxy settings."""
-    service_name: str
-    http_port: int
-    https_port: int
-
-
-@dataclass
-class Tls:
-    """Shared TLS options."""
-    certs_dir: str
-
-
-@dataclass
-class Pki:
-    """Public Key Infrastructure defaults."""
-    leaf_ttl_hours: int
-    san_list: list[str]
-
-
-@dataclass
-class Observability:
-    """Metrics and dashboards."""
-    prometheus_port: int
-    grafana_port: int
-    scrape_interval: str
-
-
-@dataclass
-class ServiceDefaults:
-    """Base defaults for services."""
-    health_dir: str
+@dataclass(frozen=True)
+class Timeouts:
     init_timeout_s: int
     retry_interval_s: int
     backoff_factor: float
     max_retry_interval_s: int
 
 
-@dataclass
+@dataclass(frozen=True)
+class Consul:
+    host: str
+    http_port: int
+    https_port: int
+
+
+@dataclass(frozen=True)
+class Vault:
+    host: str
+    http_port: int
+    https_port: int
+    pki_root_path: str
+    pki_int_path: str
+    pki_role: str
+
+
+@dataclass(frozen=True)
+class Traefik:
+    host: str
+    http_port: int
+    https_port: int
+
+
+@dataclass(frozen=True)
 class Database:
-    """Database public settings."""
-    service_name: str
-    http_port: int
+    host: str
+    port: int
 
 
-@dataclass
-class Keycloak:
-    """Keycloak public settings."""
-    service_name: str
-    http_port: int
+@dataclass(frozen=True)
+class Observability:
+    prometheus_port: int
+    grafana_port: int
+    scrape_interval: str
 
 
-@dataclass
-class RabbitMQ:
-    """RabbitMQ public settings."""
-    service_name: str
-    http_port: int
+@dataclass(frozen=True)
+class Policy:
+    pki_leaf_ttl_hours: int
+    cert_rotate_hours: int
+    # Производные поля
+    san_list: tuple[str, ...]
 
 
-@dataclass
+@dataclass(frozen=True)
 class Settings:
     domain: Domain
+    paths: Paths
+    timeouts: Timeouts
     consul: Consul
     vault: Vault
     traefik: Traefik
-    tls: Tls
-    pki: Pki
-    observability: Observability
-    service: ServiceDefaults
     database: Database
-    keycloak: Keycloak
-    rabbitmq: RabbitMQ
+    observability: Observability
+    policy: Policy
 
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
+# ----------------------------
+# Derived values
+# ----------------------------
 
-def _parse_bool(value: Optional[str], default: bool = False) -> bool:
-    if value is None:
-        return default
-    return value.strip().lower() in {"1", "true", "yes", "on"}
-
-
-def _parse_int(value: Optional[str], default: int = 0) -> int:
-    try:
-        return int(value) if value is not None else default
-    except ValueError:
-        return default
-
-
-def _parse_float(value: Optional[str], default: float = 0.0) -> float:
-    try:
-        return float(value) if value is not None else default
-    except ValueError:
-        return default
-
-
-def _parse_list(value: Optional[str]) -> list[str]:
-    if not value:
-        return []
-    return [item.strip() for item in value.split(",") if item.strip()]
-
-
-def load_env_value(name: str, file_name: str) -> Optional[str]:
-    """Load a value from environment variable or from file path variable."""
-    val = os.getenv(name)
-    if val is not None:
-        return val
-    path = os.getenv(file_name)
-    if path:
-        try:
-            with open(path, "r", encoding="utf-8") as f:
-                data = f.read().strip()
-                return data or None
-        except OSError:
-            return None
-    return None
+def _build_default_san_list(domain_root: str) -> List[str]:
+    """
+    Формирует SAN-список (для server leaf-сертификатов) на основе DOMAIN_ROOT
+    и внутренних имён контейнеров. Список минимальный и детерминированный.
+    """
+    hostnames = [
+        ("consul", f"consul.{domain_root}"),
+        ("vault", f"vault.{domain_root}"),
+        ("traefik", f"traefik.{domain_root}"),
+        ("database", f"db.{domain_root}"),
+    ]
+    san: List[str] = []
+    for internal, external in hostnames:
+        san.append(external)
+        san.append(internal)
+    # Уникализировать, сохраняя порядок (на случай будущих расширений)
+    seen = set()
+    ordered: List[str] = []
+    for x in san:
+        if x not in seen:
+            ordered.append(x)
+            seen.add(x)
+    return ordered
 
 
-# ---------------------------------------------------------------------------
-# Loading and hashing
-# ---------------------------------------------------------------------------
+# ----------------------------
+# Loader & hash
+# ----------------------------
 
 def load_settings() -> Settings:
-    env = os.environ
+    # Domain
+    domain = Domain(root=_env_str("DOMAIN_ROOT", "terminal.speculorg.localhost"))
 
-    domain = Domain(
-        root=env.get("DOMAIN_ROOT", ""),
-        zone=env.get("DOMAIN_ZONE"),
-        wildcard=env.get("DOMAIN_WILDCARD"),
+    # Paths
+    paths = Paths(
+        tls_certs_dir=_env_str("TLS_CERTS_DIR", "/certs"),
+        service_health_dir=_env_str("SERVICE_HEALTH_DIR", "/run/terminal/health"),
     )
 
+    # Timeouts
+    timeouts = Timeouts(
+        init_timeout_s=_env_int("SERVICE_INIT_TIMEOUT_S", 60),
+        retry_interval_s=_env_int("SERVICE_RETRY_INTERVAL_S", 2),
+        backoff_factor=_env_float("SERVICE_BACKOFF_FACTOR", 1.5),
+        max_retry_interval_s=_env_int("SERVICE_MAX_RETRY_INTERVAL_S", 15),
+    )
+
+    # Consul
     consul = Consul(
-        service_name=env.get("CONSUL_SERVICE_NAME", ""),
-        http_port=_parse_int(env.get("CONSUL_HTTP_PORT")),
-        https_port=_parse_int(env.get("CONSUL_HTTPS_PORT")),
+        host=_env_str("CONSUL_HOST", "consul"),
+        http_port=_env_int("CONSUL_HTTP_PORT", 8500),
+        https_port=_env_int("CONSUL_HTTPS_PORT", 8501),
     )
 
+    # Vault
     vault = Vault(
-        service_name=env.get("VAULT_SERVICE_NAME", ""),
-        http_port=_parse_int(env.get("VAULT_HTTP_PORT")),
-        https_port=_parse_int(env.get("VAULT_HTTPS_PORT")),
-        pki_root_path=env.get("VAULT_PKI_ROOT_PATH", ""),
-        pki_int_path=env.get("VAULT_PKI_INT_PATH", ""),
-        pki_role_name=env.get("VAULT_PKI_ROLE_NAME", ""),
-        cert_rotate_hours=_parse_int(env.get("VAULT_CERT_ROTATE_HOURS")),
+        host=_env_str("VAULT_HOST", "vault"),
+        http_port=_env_int("VAULT_HTTP_PORT", 8200),
+        https_port=_env_int("VAULT_HTTPS_PORT", 8201),
+        pki_root_path=_env_str("VAULT_PKI_ROOT_PATH", "pki-root"),
+        pki_int_path=_env_str("VAULT_PKI_INT_PATH", "pki-int"),
+        pki_role=_env_str("VAULT_PKI_ROLE", "terminal-leaf"),
     )
 
+    # Traefik
     traefik = Traefik(
-        service_name=env.get("TRAEFIK_SERVICE_NAME", ""),
-        http_port=_parse_int(env.get("TRAEFIK_HTTP_PORT")),
-        https_port=_parse_int(env.get("TRAEFIK_HTTPS_PORT")),
+        host=_env_str("TRAEFIK_HOST", "traefik"),
+        http_port=_env_int("TRAEFIK_HTTP_PORT", 80),
+        https_port=_env_int("TRAEFIK_HTTPS_PORT", 443),
     )
 
-    tls = Tls(
-        certs_dir=env.get("TLS_CERTS_DIR", ""),
-    )
-
-    pki = Pki(
-        leaf_ttl_hours=_parse_int(env.get("PKI_LEAF_TTL_HOURS")),
-        san_list=_parse_list(env.get("PKI_SAN_LIST")),
-    )
-
-    observability = Observability(
-        prometheus_port=_parse_int(env.get("OBS_PROMETHEUS_PORT")),
-        grafana_port=_parse_int(env.get("OBS_GRAFANA_PORT")),
-        scrape_interval=env.get("OBS_SCRAPE_INTERVAL", ""),
-    )
-
-    service = ServiceDefaults(
-        health_dir=env.get("SERVICE_HEALTH_DIR", ""),
-        init_timeout_s=_parse_int(env.get("SERVICE_INIT_TIMEOUT_S")),
-        retry_interval_s=_parse_int(env.get("SERVICE_RETRY_INTERVAL_S")),
-        backoff_factor=_parse_float(env.get("SERVICE_BACKOFF_FACTOR")),
-        max_retry_interval_s=_parse_int(env.get("SERVICE_MAX_RETRY_INTERVAL_S")),
-    )
-
+    # Database
     database = Database(
-        service_name=env.get("DB_SERVICE_NAME", ""),
-        http_port=_parse_int(env.get("DB_HTTP_PORT")),
+        host=_env_str("DB_HOST", "database"),
+        port=_env_int("POSTGRES_PORT", 5432),
     )
 
-    keycloak = Keycloak(
-        service_name=env.get("KC_SERVICE_NAME", ""),
-        http_port=_parse_int(env.get("KC_HTTP_PORT")),
+    # Observability
+    observability = Observability(
+        prometheus_port=_env_int("OBS_PROMETHEUS_PORT", 9090),
+        grafana_port=_env_int("OBS_GRAFANA_PORT", 3000),
+        scrape_interval=_env_duration_like("OBS_SCRAPE_INTERVAL", "15s"),
     )
 
-    rabbitmq = RabbitMQ(
-        service_name=env.get("MQ_SERVICE_NAME", ""),
-        http_port=_parse_int(env.get("MQ_HTTP_PORT")),
+    # Policy (with derived SAN list)
+    san_list = _build_default_san_list(domain.root)
+    policy = Policy(
+        pki_leaf_ttl_hours=_env_int("PKI_LEAF_TTL_HOURS", 24),
+        cert_rotate_hours=_env_int("CERT_ROTATE_HOURS", 24),
+        san_list=tuple(san_list),
     )
 
     return Settings(
         domain=domain,
+        paths=paths,
+        timeouts=timeouts,
         consul=consul,
         vault=vault,
         traefik=traefik,
-        tls=tls,
-        pki=pki,
-        observability=observability,
-        service=service,
         database=database,
-        keycloak=keycloak,
-        rabbitmq=rabbitmq,
+        observability=observability,
+        policy=policy,
     )
 
 
-def _sorted(obj: Any) -> Any:
+def _to_canonical(obj: Any) -> Any:
+    """
+    Канонизирует dataclass/словарь/список для последующего JSON-дампа:
+    - dataclass -> dict
+    - dict -> сортированные ключи рекурсивно
+    - list/tuple -> список с канонизацией элементов
+    - простые типы -> как есть
+    """
+    if hasattr(obj, "__dataclass_fields__"):
+        return _to_canonical(asdict(obj))
     if isinstance(obj, dict):
-        return {k: _sorted(obj[k]) for k in sorted(obj)}
-    if isinstance(obj, list):
-        return [_sorted(v) for v in obj]
+        return {k: _to_canonical(obj[k]) for k in sorted(obj)}
+    if isinstance(obj, (list, tuple)):
+        return [_to_canonical(x) for x in obj]
     return obj
 
 
 def config_hash(settings: Settings) -> str:
-    """Calculate SHA-256 hash from sorted settings dictionary."""
-    data = asdict(settings)
-    canonical = _sorted(data)
-    dumped = json.dumps(canonical, ensure_ascii=False, separators=(",", ":"))
-    return hashlib.sha256(dumped.encode("utf-8")).hexdigest()
+    """
+    Вычисляет SHA-256 по несекретным полям SETTINGS.
+    Поля уже несекретны по определению, но мы всё равно приводим к
+    канонической форме для детерминированного результата.
+    """
+    canonical = _to_canonical(settings)
+    data = json.dumps(canonical, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(data).hexdigest()
 
 
-SETTINGS = load_settings()
-CONFIG_HASH = config_hash(SETTINGS)
+# ----------------------------
+# Module-level singletons
+# ----------------------------
+
+SETTINGS: Settings = load_settings()
+CONFIG_HASH: str = config_hash(SETTINGS)
+
+__all__ = [
+    "Settings",
+    "SETTINGS",
+    "CONFIG_HASH",
+    "read_env_or_file",
+]

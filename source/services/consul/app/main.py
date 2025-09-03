@@ -1,5 +1,4 @@
-# source\services\consul\app\main.py
-
+# source/services/consul/app/main.py
 
 from __future__ import annotations
 
@@ -15,12 +14,12 @@ from typing import Dict, Optional
 
 from core.base.service import ContextMicroservice
 from core.runtime.status import ServiceStatus
-from core.settings.settings import settings
+from core.settings.settings import SETTINGS
 from core.net.port import wait_port
 
 
 # ───────────────────────────── Paths & Const ─────────────────────────────
-CERTS_DIR = Path("/certs")
+CERTS_DIR = Path(SETTINGS.paths.tls_certs_dir)
 CONSUL_CERT = CERTS_DIR / "consul.crt"
 CONSUL_KEY  = CERTS_DIR / "consul.key"
 CA_CERT     = CERTS_DIR / "ca.crt"
@@ -77,10 +76,11 @@ POLICIES: Dict[str, Dict] = {
 
 # ───────────────────────────── HTTP helpers ─────────────────────────────
 def _http_conn(https: bool) -> http.client.HTTPConnection | http.client.HTTPSConnection:
+    host = SETTINGS.consul.host
     if not https:
-        return http.client.HTTPConnection(settings.CONSUL_HOST, settings.CONSUL_PORT_HTTP, timeout=5)
+        return http.client.HTTPConnection(host, SETTINGS.consul.http_port, timeout=5)
     ctx = ssl.create_default_context(cafile=str(CA_CERT)) if CA_CERT.exists() else ssl.create_default_context()
-    return http.client.HTTPSConnection(settings.CONSUL_HOST, settings.CONSUL_PORT_HTTPS, timeout=5, context=ctx)
+    return http.client.HTTPSConnection(host, SETTINGS.consul.https_port, timeout=5, context=ctx)
 
 
 def _api(method: str, path: str, *, token: str | None = None, https: bool = False, body: Optional[dict] = None) -> http.client.HTTPResponse:
@@ -145,9 +145,10 @@ class ConsulService(ContextMicroservice):
         self.proc_attach(proc)
 
         # ждем порта + лидера
-        port = settings.CONSUL_PORT_HTTPS if https else settings.CONSUL_PORT_HTTP
-        if not await wait_port(settings.CONSUL_HOST, port, timeout=60.0):
-            self.log.error("evt=wait.port.timeout host=%s port=%s", settings.CONSUL_HOST, port)
+        host = SETTINGS.consul.host
+        port = SETTINGS.consul.https_port if https else SETTINGS.consul.http_port
+        if not await wait_port(host, port, timeout=60.0):
+            self.log.error("evt=wait.port.timeout host=%s port=%s", host, port)
             return False
 
         if not await asyncio.get_event_loop().run_in_executor(None, _leader_ready, https):
@@ -164,8 +165,10 @@ class ConsulService(ContextMicroservice):
                 self._child.terminate()
                 await asyncio.get_event_loop().run_in_executor(None, self._child.wait, 10)
             except Exception:
-                try: self._child.kill()
-                except Exception: pass
+                try:
+                    self._child.kill()
+                except Exception:
+                    pass
 
     async def _ensure_init_http(self) -> None:
         """ACL bootstrap + policies + tokens (HTTP mode). Idempotent."""
