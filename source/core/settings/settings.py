@@ -14,8 +14,11 @@ Speculorg.Terminal :: core.settings.settings
 - Код приложения использует ТОЛЬКО SETTINGS (никаких os.environ прямо).
 - Константы исполнения (например, PYTHONUNBUFFERED/PYTHONPATH) - в compose/Dockerfile.
 
-Группы:
+Слои:
 - Domain, Paths, Timeouts, Consul, Vault, Traefik, Database, Observability, Policy.
+- Context - паспорт текущего экземпляра сервиса (name/port/tags/health_file).
+  Context используется в коде, но исключается из CONFIG_HASH (кластерный дрейф не должен
+  зависеть от конкретного экземпляра).
 """
 
 from __future__ import annotations
@@ -24,7 +27,7 @@ import hashlib
 import json
 import os
 from dataclasses import asdict, dataclass
-from typing import Any, Dict, List, Mapping
+from typing import Any, List
 
 
 # ----------------------------
@@ -152,6 +155,15 @@ class Policy:
 
 
 @dataclass(frozen=True)
+class Context:
+    """Паспорт текущего экземпляра сервиса."""
+    name: str
+    port: int
+    tags: tuple[str, ...]
+    health_file: str  # абсолютный путь к health-снапшоту этого экземпляра
+
+
+@dataclass(frozen=True)
 class Settings:
     domain: Domain
     paths: Paths
@@ -162,6 +174,7 @@ class Settings:
     database: Database
     observability: Observability
     policy: Policy
+    context: Context
 
 
 # ----------------------------
@@ -183,7 +196,7 @@ def _build_default_san_list(domain_root: str) -> List[str]:
     for internal, external in hostnames:
         san.append(external)
         san.append(internal)
-    # Уникализировать, сохраняя порядок (на случай будущих расширений)
+    # Уникализировать, сохраняя порядок
     seen = set()
     ordered: List[str] = []
     for x in san:
@@ -191,6 +204,11 @@ def _build_default_san_list(domain_root: str) -> List[str]:
             ordered.append(x)
             seen.add(x)
     return ordered
+
+
+def _parse_tags_csv(csv_value: str) -> tuple[str, ...]:
+    parts = [p.strip() for p in csv_value.split(",")] if csv_value else []
+    return tuple(p for p in parts if p)
 
 
 # ----------------------------
@@ -226,8 +244,8 @@ def load_settings() -> Settings:
     vault = Vault(
         host=_env_str("VAULT_HOST", "vault"),
         http_port=_env_int("VAULT_HTTP_PORT", 8200),
-        https_port=_env_int("VAULT_HTTPS_PORT", 8201),
-        pki_root_path=_env_str("VAULT_PKI_ROOT_PATH", "pki-root"),
+        https_port=_env_int("VAULT_HTTPS_PORT", 8200),
+        pki_root_path=_env_str("VAULT_PKI_ROOT_PATH", "pki"),
         pki_int_path=_env_str("VAULT_PKI_INT_PATH", "pki-int"),
         pki_role=_env_str("VAULT_PKI_ROLE", "terminal-leaf"),
     )
@@ -260,6 +278,14 @@ def load_settings() -> Settings:
         san_list=tuple(san_list),
     )
 
+    # Context (паспорт экземпляра сервиса)
+    svc_name = _env_str("SERVICE_NAME", "service")
+    svc_port = _env_int("SERVICE_PORT", 0)
+    svc_tags = _parse_tags_csv(_env_str("SERVICE_TAGS", ""))
+    default_health_path = f"{paths.service_health_dir}/{svc_name}.json"
+    health_file = _env_str("SERVICE_HEALTH_FILE", default_health_path)
+    context = Context(name=svc_name, port=svc_port, tags=svc_tags, health_file=health_file)
+
     return Settings(
         domain=domain,
         paths=paths,
@@ -270,6 +296,7 @@ def load_settings() -> Settings:
         database=database,
         observability=observability,
         policy=policy,
+        context=context,
     )
 
 
@@ -292,11 +319,14 @@ def _to_canonical(obj: Any) -> Any:
 
 def config_hash(settings: Settings) -> str:
     """
-    Вычисляет SHA-256 по несекретным полям SETTINGS.
-    Поля уже несекретны по определению, но мы всё равно приводим к
-    канонической форме для детерминированного результата.
+    Вычисляет SHA-256 по несекретным кластерным полям SETTINGS.
+    ВАЖНО: context (паспорт конкретного экземпляра сервиса) исключается из хэша,
+    чтобы CONFIG_HASH отражал именно конфигурацию кластера/окружения.
     """
+    # dataclass -> dict (канонизовано)
     canonical = _to_canonical(settings)
+    if isinstance(canonical, dict) and "context" in canonical:
+        canonical = {k: v for k, v in canonical.items() if k != "context"}
     data = json.dumps(canonical, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
     return hashlib.sha256(data).hexdigest()
 

@@ -3,6 +3,12 @@
 
 ---
 
+## [2025.09.04] Реорганизована конфигурация
+- Строгая модель конфигурации SETTINGS: settings.env → docker-compose.yml → core/settings/settings.py → код; добавлены производные значения (SAN, CONFIG_HASH), вычищены лишние флаги (*_HTTP_ADDR, tls_enabled).
+- Обновлён ContextMicroservice: выровнен под SETTINGS, единые тикеры health/metrics, безопасное завершение, улучшена регистрация через Consul.
+- Переписан начальный бутстрап Vault/PKI: параметризованные pki-mounts (root+intermediate), set-signed для intermediate, роль для выдачи листовых, сохранение fullchain; исправлены ошибки валидации цепочки сертификатов.
+- Актуализированы main.py для Consul/Vault/Traefik под SETTINGS и схемы bootstrap → initialize → run: управляемый старт процессов, ожидание портов/здоровья/лидерства, переключение на mTLS после бутстрапа.
+
 ## [2025.09.01] Реорганизовано логирование
 - Консолидация логирования в единый модуль (`source\core\logging`), базовый класс для унификации форматов, JSON-логер.
 

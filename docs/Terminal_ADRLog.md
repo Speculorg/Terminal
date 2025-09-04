@@ -3,6 +3,16 @@
 
 ---
 
+## [2025.09.04] ADR-010: 
+- Введён пакет core.logging с JSON-логированием в stdout/stderr.
+- Разделение конфигурации на слои:
+  - settings.env — только настраиваемые параметры окружения, реально влияющие на перенос и поведение.
+  - docker-compose.yml — декларация сервисов и развёртывательные константы, «склейка» ${…} из settings.env.
+  - source/core/settings/settings.py — чтение/валидация/нормализация, производные значения (SAN и др.), публикация SETTINGS и CONFIG_HASH.
+  - код читает параметры только через SETTINGS; доступ к сырому окружению не допускается (запрещены os.environ, os.getenv); "паспорт" экземпляра сервиса находятся в SETTINGS.context.
+  - сервисные конфиги (consul_*.hcl, vault_*.hcl, traefik.yml) — локальная логика конкретного сервиса, могут требовать обязательные ключи окружения.
+- PKI в Vault параметризована путями монтирования: VAULT_PKI_ROOT_PATH и VAULT_PKI_INT_PATH. Бутстрап Vault всегда по HTTP, далее — mTLS. Листовые сертификаты теперь пишутся как fullchain (leaf + chain) в *.crt; корень — ca.crt. Это устранило ошибки x509: certificate signed by unknown authority.
+
 ## [2025.08.24] ADR-009: Уточнение базовых каркасов и деление ядра
 - Каркас сервиса BaseService упразднён как дублирующий. Теперь используются базовые каркасы ContextMicroservice (service.py), ExternalServiceAdapter (adapter.py) и Module (module.py).
 - Переносён и упрощён `.\settings.py`; унификация ENV и путей.

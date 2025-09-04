@@ -4,12 +4,12 @@ from __future__ import annotations
 import asyncio
 import os
 import subprocess
+
 from core.base.service import ContextMicroservice
 from core.runtime.status import ServiceStatus
 from core.settings.settings import SETTINGS
 from core.net.port import wait_port
 from core.infra.tls import probe_tls
-
 
 TRAEFIK_SCHEME: dict = {
     "ports": {
@@ -18,11 +18,13 @@ TRAEFIK_SCHEME: dict = {
     },
     "tls_probe": {
         "host": SETTINGS.traefik.host,
-        "require_tls": False,
+        "require_tls": False,      # на TERM-1 не навязываем строгую проверку, только детектим
         "probe_timeout": 2.0,
     },
 }
 
+# Тайминги из SETTINGS
+INIT_TIMEOUT = float(SETTINGS.timeouts.init_timeout_s)
 
 class TraefikService(ContextMicroservice):
     async def initialize(self) -> None:
@@ -31,11 +33,13 @@ class TraefikService(ContextMicroservice):
         proc = subprocess.Popen(cmd)  # noqa: S603
         self.proc_attach(proc)
 
-        if not await wait_port(SETTINGS.traefik.host, TRAEFIK_SCHEME["ports"]["http"], timeout=60.0):
-            self.log.error("evt=wait.traefik.timeout host=%s port=%s", SETTINGS.traefik.host, TRAEFIK_SCHEME["ports"]["http"])
+        if not await wait_port(SETTINGS.traefik.host, TRAEFIK_SCHEME["ports"]["http"], timeout=INIT_TIMEOUT):
+            self.log.error("evt=wait.traefik.timeout host=%s port=%s",
+                           SETTINGS.traefik.host, TRAEFIK_SCHEME["ports"]["http"])
             return
 
-        tls_ok = probe_tls(SETTINGS.traefik.host, TRAEFIK_SCHEME["ports"]["https"], timeout=TRAEFIK_SCHEME["tls_probe"]["probe_timeout"])
+        tls_ok = probe_tls(SETTINGS.traefik.host, TRAEFIK_SCHEME["ports"]["https"],
+                           timeout=TRAEFIK_SCHEME["tls_probe"]["probe_timeout"])
         self.svc_set_tls_active(tls_ok)
 
         if TRAEFIK_SCHEME["tls_probe"]["require_tls"]:

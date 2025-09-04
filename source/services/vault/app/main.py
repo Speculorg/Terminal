@@ -16,8 +16,7 @@ from core.runtime.status import ServiceStatus
 from core.settings.settings import SETTINGS
 from core.net.port import wait_port
 
-
-# ───────────────────────────── Paths & Const ─────────────────────────────
+# ----------------------------- Paths & Const -----------------------------
 CERTS_DIR: Final[Path] = Path(SETTINGS.paths.tls_certs_dir)
 SECRETS_DIR: Final[Path] = Path("/vault/secrets")
 SECRETS_DIR.mkdir(parents=True, exist_ok=True)
@@ -33,22 +32,29 @@ KEY_VLT = CERTS_DIR / "vault.key"
 
 WAIT_HEALTH_SEC: Final[int] = 30
 
+# Тайминги из SETTINGS
+INIT_TIMEOUT = float(SETTINGS.timeouts.init_timeout_s)
+RETRY_BASE   = float(SETTINGS.timeouts.retry_interval_s)
+RETRY_MAX    = float(SETTINGS.timeouts.max_retry_interval_s)
+BACKOFF      = float(SETTINGS.timeouts.backoff_factor)
+
 # PKI / domain (из SETTINGS)
 DOMAIN_ROOT: Final[str] = SETTINGS.domain.root
-PKI_ROOT_PATH: Final[str] = SETTINGS.vault.pki_root_path  # например: pki-root
-PKI_INT_PATH:  Final[str] = SETTINGS.vault.pki_int_path   # например: pki-int
-PKI_ROLE:      Final[str] = SETTINGS.vault.pki_role       # например: terminal-leaf
+PKI_ROOT_PATH: Final[str] = SETTINGS.vault.pki_root_path   # например: "pki"
+PKI_INT_PATH:  Final[str] = SETTINGS.vault.pki_int_path    # например: "internal"
+PKI_ROLE:      Final[str] = SETTINGS.vault.pki_role        # например: "terminal-leaf"
 
 PKI_ROOT_TTL:     Final[str] = "87600h"
 PKI_ROLE_MAX_TTL: Final[str] = "720h"
 
-# Лифы — по именам сервисов; SAN-список берём из SETTINGS.policy.san_list
+# Лифы — минимальный набор (при необходимости расширим SAN из SETTINGS.policy.san_list)
 LEAF_SVCS: Final[dict[str, dict[str, str]]] = {
     "consul":  {"common_name": f"consul.{DOMAIN_ROOT}",  "alt_names": "server.dc-1.consul,consul,localhost"},
     "vault":   {"common_name": f"vault.{DOMAIN_ROOT}",   "alt_names": "vault,localhost"},
     "traefik": {"common_name": f"traefik.{DOMAIN_ROOT}", "alt_names": "traefik,localhost"},
 }
 
+# Начальные KV/политики/approle (seed)
 SECRETS_KV: Final[dict[str, dict[str, str]]] = {
     "database": {"user": "speculorg", "pass": "speculpwd"},
     "rabbitmq": {"user": "guest",     "pass": "guest"},
@@ -67,8 +73,7 @@ APPROLES: Final[dict[str, dict]] = {
     "db-role": {"policies": ["read-db"], "secret_id_ttl": "0s"},
 }
 
-
-# ───────────────────────────── HTTP helpers ─────────────────────────────
+# ----------------------------- HTTP helpers -----------------------------
 def _http_conn(https: bool) -> http.client.HTTPConnection | http.client.HTTPSConnection:
     host = SETTINGS.vault.host
     if not https:
@@ -77,7 +82,14 @@ def _http_conn(https: bool) -> http.client.HTTPConnection | http.client.HTTPSCon
     return http.client.HTTPSConnection(host, SETTINGS.vault.https_port, timeout=6, context=ctx)
 
 
-def _api(method: str, path: str, *, token: str | None = None, https: bool = False, body: dict | None = None) -> http.client.HTTPResponse:
+def _api(
+    method: str,
+    path: str,
+    *,
+    token: str | None = None,
+    https: bool = False,
+    body: dict | None = None
+) -> http.client.HTTPResponse:
     headers = {"Content-Type": "application/json"}
     if token:
         headers["X-Vault-Token"] = token
@@ -87,26 +99,28 @@ def _api(method: str, path: str, *, token: str | None = None, https: bool = Fals
     return conn.getresponse()
 
 
-def _health_ok(https: bool, timeout: float = WAIT_HEALTH_SEC) -> bool:
-    end = time.time() + timeout
-    while time.time() < end:
+def _health_ok(https: bool, timeout: float) -> bool:
+    """Ожидание валидного статуса здоровья экспоненциальным backoff."""
+    deadline = time.time() + max(1.0, timeout)
+    delay = max(0.2, RETRY_BASE)
+    while time.time() < deadline:
         try:
             resp = _api("GET", "/v1/sys/health", https=https)
-            # 200/429/501/503 — валидные статусы жизненного цикла Vault
+            # 200/429/501/503 — допустимые стадии Vault
             if resp.status in (200, 429, 501, 503):
                 return True
         except Exception:
             pass
-        time.sleep(1)
+        time.sleep(min(delay, RETRY_MAX))
+        delay = min(delay * BACKOFF, RETRY_MAX)
     return False
 
-
-# ───────────────────────────── Service ─────────────────────────────
+# ----------------------------- Service -----------------------------
 class VaultService(ContextMicroservice):
     async def initialize(self) -> None:
         first_run = not (CRT_VLT.exists() and CA_PEM.exists())
 
-        # 1) first boot (HTTP), init/unseal + PKI/KV/Policies/AppRoles -> issue leaf certs
+        # 1) first boot (HTTP), init/unseal + PKI/KV/Policies/AppRoles -> issue leaf certs (fullchain)
         if first_run:
             if not await self._start_vault(cfg=CFG_HTTP, https=False):
                 return
@@ -126,7 +140,7 @@ class VaultService(ContextMicroservice):
         while not getattr(self, "_shutdown").is_set():
             await asyncio.sleep(5)
 
-    # ── helpers ──
+    # -- helpers --
     async def _start_vault(self, *, cfg: str, https: bool) -> bool:
         cmd = ["vault", "server", f"-config={cfg}"]
         self.log.info("evt=proc.start app=vault mode=%s cmd=%s", "https" if https else "http", " ".join(cmd))
@@ -135,11 +149,13 @@ class VaultService(ContextMicroservice):
 
         host = SETTINGS.vault.host
         port = SETTINGS.vault.https_port if https else SETTINGS.vault.http_port
-        if not await wait_port(host, port, timeout=60.0):
+        if not await wait_port(host, port, timeout=INIT_TIMEOUT):
             self.log.error("evt=wait.port.timeout host=%s port=%s", host, port)
             return False
 
-        if not await asyncio.get_event_loop().run_in_executor(None, _health_ok, https):
+        loop = asyncio.get_event_loop()
+        ok = await loop.run_in_executor(None, _health_ok, https, INIT_TIMEOUT)
+        if not ok:
             self.log.error("evt=wait.health.timeout mode=%s", "https" if https else "http")
             return False
 
@@ -158,7 +174,7 @@ class VaultService(ContextMicroservice):
                 except Exception:
                     pass
 
-    # ── init/unseal/kv/policies/pki (HTTP) ──
+    # -- init/unseal/kv/policies/pki (HTTP) --
     async def _ensure_init_unseal_http(self) -> None:
         # already initialised?
         resp = _api("GET", "/v1/sys/health", https=False)
@@ -257,8 +273,7 @@ class VaultService(ContextMicroservice):
             if not (200 <= res.status < 300):
                 self.log.error("evt=vault.pki.root.fail code=%s", res.status); return
             ca_pem = json.loads(res.read().decode("utf-8") or "{}").get("data", {}).get("certificate", "")
-            CA_PEM.write_text(ca_pem, encoding="utf-8")
-            CA_PEM.chmod(0o644)
+            CA_PEM.write_text(ca_pem, encoding="utf-8"); CA_PEM.chmod(0o644)
             self.log.info("evt=vault.pki.root.saved path=%s", CA_PEM)
 
             _api("POST", f"/v1/{PKI_ROOT_PATH}/config/urls", token=root_token, https=False, body={
@@ -267,21 +282,18 @@ class VaultService(ContextMicroservice):
             }).read()
 
             # Создаём промежуточный CA и подписываем его рутом
-            # 1) генерируем CSR для intermediate
             csr_res = _api("POST", f"/v1/{PKI_INT_PATH}/intermediate/generate/internal",
                            token=root_token, https=False, body={"common_name": f"intermediate.{DOMAIN_ROOT}"})
             if not (200 <= csr_res.status < 300):
                 self.log.error("evt=vault.pki.int.csr.fail code=%s", csr_res.status); return
             csr = json.loads(csr_res.read().decode("utf-8") or "{}").get("data", {}).get("csr", "")
 
-            # 2) root подписывает
             sign_res = _api("POST", f"/v1/{PKI_ROOT_PATH}/root/sign-intermediate",
                             token=root_token, https=False, body={"csr": csr, "ttl": PKI_ROOT_TTL})
             if not (200 <= sign_res.status < 300):
                 self.log.error("evt=vault.pki.int.sign.fail code=%s", sign_res.status); return
             cert = json.loads(sign_res.read().decode("utf-8") or "{}").get("data", {}).get("certificate", "")
 
-            # 3) публим сертификат в intermediate
             _api("POST", f"/v1/{PKI_INT_PATH}/intermediate/set-signed",
                  token=root_token, https=False, body={"certificate": cert}).read()
             self.log.info("evt=vault.pki.int.ready")
@@ -295,17 +307,33 @@ class VaultService(ContextMicroservice):
             "max_ttl": PKI_ROLE_MAX_TTL,
         }).read()
 
-        # leafs
+        # leafs (формируем FULLCHAIN = leaf + issuing_ca/ca_chain)
         for name, params in LEAF_SVCS.items():
             crt, key = CERTS_DIR / f"{name}.crt", CERTS_DIR / f"{name}.key"
             if crt.exists() and key.exists():
-                self.log.info("evt=vault.pki.leaf.exists name=%s", name); continue
+                self.log.info("evt=vault.pki.leaf.exists name=%s", name)
+                continue
+
             self.log.info("evt=vault.pki.issue name=%s cn=%s", name, params.get("common_name"))
-            res = _api("POST", f"/v1/{PKI_INT_PATH}/issue/{PKI_ROLE}", token=root_token, https=False, body=params)
+            res = _api("POST", f"/v1/{PKI_INT_PATH}/issue/{PKI_ROLE}",
+                       token=root_token, https=False, body=params)
             if not (200 <= res.status < 300):
-                self.log.error("evt=vault.pki.issue.fail name=%s code=%s", name, res.status); continue
+                self.log.error("evt=vault.pki.issue.fail name=%s code=%s", name, res.status)
+                continue
+
             data = json.loads(res.read().decode("utf-8") or "{}").get("data", {})
-            crt.write_text(data.get("certificate", ""), encoding="utf-8"); crt.chmod(0o644)
+            leaf = data.get("certificate", "")
+            issuing_ca = data.get("issuing_ca", "")
+            ca_chain = data.get("ca_chain") or []
+
+            chain_tail = "\n".join([c for c in ca_chain if c.strip()]) if ca_chain else issuing_ca
+            fullchain_pem = (leaf or "").strip()
+            if chain_tail:
+                if not fullchain_pem.endswith("\n"):
+                    fullchain_pem += "\n"
+                fullchain_pem += chain_tail.strip() + "\n"
+
+            crt.write_text(fullchain_pem, encoding="utf-8"); crt.chmod(0o644)
             key.write_text(data.get("private_key", ""), encoding="utf-8");  key.chmod(0o600)
             self.log.info("evt=vault.pki.leaf.saved name=%s crt=%s key=%s", name, crt, key)
 
