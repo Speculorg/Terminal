@@ -12,7 +12,8 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
-from core.settings.settings import SETTINGS
+
+from core.settings.settings import SETTINGS, CONFIG_HASH
 from core.runtime.status import ServiceStatus, HealthSnapshot
 from core.runtime.health_io import write_health
 from core.runtime.lifecycle import install_signal_shutdown_flag, Periodic
@@ -23,6 +24,12 @@ from core.infra.registrars.base import Registrar
 from core.infra.registrars.consul import ConsulRegistrar
 from core.net.url import build_url, fqdn
 
+# KV фасад (агрегат)
+try:
+    from core.kv import KV  # type: ignore
+except Exception:  # pragma: no cover
+    KV = None  # type: ignore[misc]
+
 
 # ----------------------------- Dependencies (DIP) -----------------------------
 
@@ -31,6 +38,7 @@ class ContextMicroserviceDeps:
     registrar: Optional[Registrar] = None
     health_file: Path = Path(SETTINGS.context.health_file)
     metrics: Registry = metrics_registry()
+    kv: Optional[KV] = None  # type: ignore
 
 
 # ----------------------------- ContextMicroservice -----------------------------
@@ -113,17 +121,24 @@ class ContextMicroservice:
         install_signal_shutdown_flag(self._shutdown, on_signal=self._on_signal)
 
         try:
+            # BOOTSTRAP
             self._set_status(ServiceStatus.BOOTSTRAPPING, "entry")
             self._tick_health.start()
             self._tick_metrics.start()
 
+            # Публикация CONFIG_HASH/DOMAIN_ROOT в KV (идемпотентно)
+            self._publish_config_hash_once()
+
+            # INIT
             self._set_status(ServiceStatus.INITIALIZING, "initialize()")
             await self.initialize()
 
+            # REGISTER
             self._set_status(ServiceStatus.REGISTERING, "registrar.register()")
             if self.deps.registrar:
                 await self.deps.registrar.register()
 
+            # RUN
             self._set_status(ServiceStatus.RUNNING, "start()")
             await self.start()
 
@@ -175,6 +190,16 @@ class ContextMicroservice:
             reason=";".join(reasons) if reasons else "-",
         )
 
+        # Отразить фазу/статус в KV (идемпотентно через CAS)
+        kv = getattr(self.deps, "kv", None)
+        if kv is not None:
+            try:
+                kv.status.set_phase(self._svc_name, st.value, meta={"reasons": list(reasons) if reasons else []})
+                kv.status.set_status(self._svc_name, st)
+            except Exception as exc:  # noqa: BLE001
+                # только лог, не валим сервис при временных KV проблемах
+                self.log.warning("evt=kv.status.update.fail", err=exc)
+
     def svc_health_snapshot(self) -> dict:
         snap = self._health.to_dict()
         snap.update({
@@ -190,12 +215,28 @@ class ContextMicroservice:
         except Exception as exc:  # noqa: BLE001
             self.log.warning("evt=health.write.fail", err=exc)
 
+        # Параллельно — heartbeat в KV
+        kv = getattr(self.deps, "kv", None)
+        if kv is not None:
+            try:
+                kv.status.heartbeat(self._svc_name, tls_active=self._tls_active)
+            except Exception as exc:  # noqa: BLE001
+                self.log.warning("evt=kv.heartbeat.fail", err=exc)
+
     # ----------------------------- TLS / URL helpers -----------------------------
 
     def svc_set_tls_active(self, active: bool) -> None:
         self._tls_active = bool(active)
         self._g_tls_active.set(1.0 if self._tls_active else 0.0, labels={"svc": self._svc_name})
         self.log.info("evt=tls.state", active=1 if active else 0)
+
+        # Ради полноты — быстрый heartbeat в KV при смене TLS
+        kv = getattr(self.deps, "kv", None)
+        if kv is not None:
+            try:
+                kv.status.heartbeat(self._svc_name, tls_active=self._tls_active, meta={"evt": "tls_active_changed"})
+            except Exception as exc:  # noqa: BLE001
+                self.log.warning("evt=kv.heartbeat.fail", err=exc)
 
     def svc_url(self, host: str, port_http: int, port_https: int, path: str = "") -> str:
         return build_url(host, port_http, port_https, path, tls=self._tls_active)
@@ -238,3 +279,21 @@ class ContextMicroservice:
 
     def _uptime_seconds(self) -> float:
         return max(0.0, time.time() - float(self._health.started_at or time.time()))
+
+    def _publish_config_hash_once(self) -> None:
+        """
+        Идемпотентно публикует текущий CONFIG_HASH и DOMAIN_ROOT в KV.
+        Используется на старте, до initialize().
+        """
+        kv = getattr(self.deps, "kv", None)
+        if kv is None:
+            return
+        try:
+            # config/global/config_hash
+            if not kv.config.set_config_hash(CONFIG_HASH):
+                self.log.warning("evt=kv.config_hash.write.false")
+            # config/global/domain_root (подтверждение домена)
+            if not kv.config.set_domain_root(SETTINGS.domain.root):
+                self.log.warning("evt=kv.domain_root.write.false")
+        except Exception as exc:  # noqa: BLE001
+            self.log.warning("evt=kv.publish_config.fail", err=exc)

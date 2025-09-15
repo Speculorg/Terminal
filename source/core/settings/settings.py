@@ -27,7 +27,7 @@ import hashlib
 import json
 import os
 from dataclasses import asdict, dataclass
-from typing import Any, List
+from typing import Any, List, Tuple
 
 
 # ----------------------------
@@ -36,7 +36,7 @@ from typing import Any, List
 
 def _env_str(name: str, default: str) -> str:
     v = os.getenv(name)
-    return v if v is not None and v != "" else default
+    return default if v is None or v.strip() == "" else v.strip()
 
 
 def _env_int(name: str, default: int) -> int:
@@ -57,6 +57,16 @@ def _env_float(name: str, default: float) -> float:
         return float(v.strip())
     except ValueError:
         return default
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    v = os.getenv(name)
+    if v is None:
+        return default
+    s = v.strip().lower()
+    if s == "":
+        return default
+    return s in ("1", "true", "yes", "on")
 
 
 def _env_duration_like(name: str, default: str) -> str:
@@ -114,6 +124,17 @@ class Consul:
     host: str
     http_port: int
     https_port: int
+    # TLS (несекретные пути и флаги)
+    tls_enabled: bool
+    tls_ca_file: str | None
+    tls_cert_file: str | None
+    tls_key_file: str | None
+
+    # Производные/утилиты
+    def url(self) -> str:
+        scheme = "https" if self.tls_enabled else "http"
+        port = self.https_port if self.tls_enabled else self.http_port
+        return f"{scheme}://{self.host}:{port}"
 
 
 @dataclass(frozen=True)
@@ -175,6 +196,30 @@ class Settings:
     observability: Observability
     policy: Policy
     context: Context
+
+    # TODO: Временная совместимость с плоскими атрибутами (используются в других местах кода) ----
+    @property
+    def DOMAIN_ROOT(self) -> str: return self.domain.root
+
+    # Consul (для фабрики KV)
+    @property
+    def CONSUL_HOST(self) -> str: return self.consul.host
+    @property
+    def CONSUL_HTTP_PORT(self) -> int: return self.consul.http_port
+    @property
+    def CONSUL_HTTPS_PORT(self) -> int: return self.consul.https_port
+    @property
+    def CONSUL_TLS_ENABLED(self) -> bool: return self.consul.tls_enabled
+    @property
+    def CONSUL_TLS_CA_FILE(self) -> str | None: return self.consul.tls_ca_file
+    @property
+    def CONSUL_TLS_CERT_FILE(self) -> str | None: return self.consul.tls_cert_file
+    @property
+    def CONSUL_TLS_KEY_FILE(self) -> str | None: return self.consul.tls_key_file
+
+    # Удобный доступ к URL Consul
+    def consul_http_url(self) -> str:
+        return self.consul.url()
 
 
 # ----------------------------
@@ -238,6 +283,10 @@ def load_settings() -> Settings:
         host=_env_str("CONSUL_HOST", "consul"),
         http_port=_env_int("CONSUL_HTTP_PORT", 8500),
         https_port=_env_int("CONSUL_HTTPS_PORT", 8501),
+        tls_enabled=_env_bool("CONSUL_TLS_ENABLED", False),
+        tls_ca_file=_env_str("CONSUL_TLS_CA_FILE", "/etc/ssl/consul/ca.crt"),
+        tls_cert_file=_env_str("CONSUL_TLS_CERT_FILE", "/etc/ssl/consul/client.crt"),
+        tls_key_file=_env_str("CONSUL_TLS_KEY_FILE", "/etc/ssl/consul/client.key"),
     )
 
     # Vault
@@ -323,7 +372,6 @@ def config_hash(settings: Settings) -> str:
     ВАЖНО: context (паспорт конкретного экземпляра сервиса) исключается из хэша,
     чтобы CONFIG_HASH отражал именно конфигурацию кластера/окружения.
     """
-    # dataclass -> dict (канонизовано)
     canonical = _to_canonical(settings)
     if isinstance(canonical, dict) and "context" in canonical:
         canonical = {k: v for k, v in canonical.items() if k != "context"}

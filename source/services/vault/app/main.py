@@ -8,13 +8,20 @@ import ssl
 import subprocess
 import time
 import http.client
+import hashlib
 from pathlib import Path
-from typing import Final
+from typing import Final, Dict
 
 from core.base.service import ContextMicroservice
 from core.runtime.status import ServiceStatus
 from core.settings.settings import SETTINGS
 from core.net.port import wait_port
+from core.logging import get_logger
+from core.kv import KV, build_consul_kv_from_settings
+from core.kv import paths as kvpaths
+
+log = get_logger("vault.app")
+
 
 # ----------------------------- Paths & Const -----------------------------
 CERTS_DIR: Final[Path] = Path(SETTINGS.paths.tls_certs_dir)
@@ -30,6 +37,10 @@ CA_PEM  = CERTS_DIR / "ca.crt"
 CRT_VLT = CERTS_DIR / "vault.crt"
 KEY_VLT = CERTS_DIR / "vault.key"
 
+# Consul tokens issued by Consul service (must be mounted read-only here)
+CONSUL_TOKENS_DIR: Final[Path] = Path("/consul/secrets")
+VAULT_CONSUL_TOKEN_FILE: Final[Path] = CONSUL_TOKENS_DIR / "vault_consul_token"
+
 WAIT_HEALTH_SEC: Final[int] = 30
 
 # Тайминги из SETTINGS
@@ -41,13 +52,13 @@ BACKOFF      = float(SETTINGS.timeouts.backoff_factor)
 # PKI / domain (из SETTINGS)
 DOMAIN_ROOT: Final[str] = SETTINGS.domain.root
 PKI_ROOT_PATH: Final[str] = SETTINGS.vault.pki_root_path   # например: "pki"
-PKI_INT_PATH:  Final[str] = SETTINGS.vault.pki_int_path    # например: "internal"
+PKI_INT_PATH:  Final[str] = SETTINGS.vault.pki_int_path    # например: "pki-int"
 PKI_ROLE:      Final[str] = SETTINGS.vault.pki_role        # например: "terminal-leaf"
 
 PKI_ROOT_TTL:     Final[str] = "87600h"
 PKI_ROLE_MAX_TTL: Final[str] = "720h"
 
-# Лифы — минимальный набор (при необходимости расширим SAN из SETTINGS.policy.san_list)
+# Лифы - минимальный набор (при необходимости расширим SAN из SETTINGS.policy.san_list)
 LEAF_SVCS: Final[dict[str, dict[str, str]]] = {
     "consul":  {"common_name": f"consul.{DOMAIN_ROOT}",  "alt_names": "server.dc-1.consul,consul,localhost"},
     "vault":   {"common_name": f"vault.{DOMAIN_ROOT}",   "alt_names": "vault,localhost"},
@@ -106,7 +117,7 @@ def _health_ok(https: bool, timeout: float) -> bool:
     while time.time() < deadline:
         try:
             resp = _api("GET", "/v1/sys/health", https=https)
-            # 200/429/501/503 — допустимые стадии Vault
+            # 200/429/501/503 - допустимые стадии Vault
             if resp.status in (200, 429, 501, 503):
                 return True
         except Exception:
@@ -134,6 +145,9 @@ class VaultService(ContextMicroservice):
         if not await self._start_vault(cfg=CFG_HTTPS, https=True):
             return
         self.svc_set_tls_active(True)
+
+        # 3) Публикация публичных сертификатов и версии в Consul KV (после HTTPS старта)
+        await self._publish_certs_to_kv()
 
     async def start(self) -> None:
         self._set_status(ServiceStatus.RUNNING, "vault.up")
@@ -336,6 +350,73 @@ class VaultService(ContextMicroservice):
             crt.write_text(fullchain_pem, encoding="utf-8"); crt.chmod(0o644)
             key.write_text(data.get("private_key", ""), encoding="utf-8");  key.chmod(0o600)
             self.log.info("evt=vault.pki.leaf.saved name=%s crt=%s key=%s", name, crt, key)
+
+    # ----------------------------- Publish certs to KV -----------------------------
+
+    async def _publish_certs_to_kv(self) -> None:
+        """
+        Публикует публичные PEM в Consul KV + маркеры готовности PKI/сертификатов.
+        Использует Consul-токен для Vault из /consul/secrets/vault_consul_token.
+        """
+        token = None
+        try:
+            if VAULT_CONSUL_TOKEN_FILE.exists():
+                token = VAULT_CONSUL_TOKEN_FILE.read_text(encoding="utf-8").strip() or None
+        except Exception as exc:  # noqa: BLE001
+            self.log.warning("evt=vault.kv.token.read.fail err=%s", exc)
+
+        if not token:
+            self.log.warning("evt=vault.kv.publish.skip reason=no.consul.token")
+            return
+
+        try:
+            kv_client = build_consul_kv_from_settings(SETTINGS, token=token)
+            kv = KV(kv_client)
+            # присоединим к deps, чтобы базовый сервис мог хартбитить
+            if getattr(self, "deps", None) is not None:
+                self.deps.kv = kv
+        except Exception as exc:  # noqa: BLE001
+            self.log.warning("evt=vault.kv.attach.fail err=%s", exc)
+            return
+
+        # Маркеры готовности PKI
+        try:
+            kv.marker.ensure_true(kvpaths.M_VAULT_INITIALIZED)
+            kv.marker.ensure_true(kvpaths.M_VAULT_PKI_ROOT_READY)
+            kv.marker.ensure_true(kvpaths.M_VAULT_PKI_INT_READY)
+        except Exception as exc:  # noqa: BLE001
+            self.log.warning("evt=vault.kv.marker.pki.fail err=%s", exc)
+
+        # Публикация PEM
+        try:
+            if CA_PEM.exists():
+                kv.cert.publish_ca_pem(CA_PEM.read_text(encoding="utf-8"))
+
+            svc_pems: Dict[str, str] = {}
+            for svc in ("consul", "vault", "traefik"):
+                p = CERTS_DIR / f"{svc}.crt"
+                if p.exists():
+                    svc_pems[svc] = p.read_text(encoding="utf-8")
+
+            if svc_pems:
+                # Версию считаем как sha256 всех PEMов (детерминированно)
+                hasher = hashlib.sha256()
+                # порядок фиксируем по имени сервиса
+                for svc in sorted(svc_pems):
+                    hasher.update(svc.encode("utf-8"))
+                    hasher.update(b"\0")
+                    hasher.update(svc_pems[svc].encode("utf-8"))
+                    hasher.update(b"\0")
+                version = hasher.hexdigest()
+                if kv.cert.publish_bundle(svc_pems, version=version):
+                    kv.marker.ensure_true(kvpaths.M_VAULT_PKI_LEAF_READY)
+                    self.log.info("evt=vault.kv.certs.published version=%s svcs=%s", version, ",".join(sorted(svc_pems)))
+                else:
+                    self.log.warning("evt=vault.kv.certs.publish.false")
+            else:
+                self.log.warning("evt=vault.kv.certs.skip reason=no.svc_pems")
+        except Exception as exc:  # noqa: BLE001
+            self.log.warning("evt=vault.kv.certs.publish.fail err=%s", exc)
 
 
 async def main() -> None:

@@ -15,6 +15,12 @@ from core.base.service import ContextMicroservice
 from core.runtime.status import ServiceStatus
 from core.settings.settings import SETTINGS
 from core.net.port import wait_port
+from core.logging import get_logger
+from core.kv import KV, build_consul_kv_from_settings
+from core.kv import paths as kvpaths
+
+log = get_logger("consul.app")
+
 
 # ----------------------------- Paths & Const -----------------------------
 CERTS_DIR = Path(SETTINGS.paths.tls_certs_dir)
@@ -39,14 +45,21 @@ RETRY_BASE   = float(SETTINGS.timeouts.retry_interval_s)
 RETRY_MAX    = float(SETTINGS.timeouts.max_retry_interval_s)
 BACKOFF      = float(SETTINGS.timeouts.backoff_factor)
 
-# ACL policies -> tokens
+# ----------------------------- ACL policies (tightened & fixed) -----------------------------
+# Минимизируем поверхности доступа. Политики ориентированы на префиксы:
+# - marker/*   - факты (SoT)
+# - status/*   - живые статусы сервисов
+# - certs/*    - публичные сертификаты и версия
+# - config/*   - несекретные конфиги
+# - vault/*    - служебный Consul KV storage для Vault (ОБЯЗАТЕЛЕН!)
 POLICIES: Dict[str, Dict] = {
     "agent": {
         "name": "agent-policy",
         "rules": """
-            agent          "" { policy = "write" }
-            node_prefix    "" { policy = "write" }
-            service_prefix "" { policy = "read"  }
+            agent            "" { policy = "write" }
+            node_prefix      "" { policy = "write" }
+            service_prefix   "" { policy = "read"  }
+            session_prefix   "" { policy = "write" }
         """,
         "token_file": AGENT_TOKEN_FILE,
         "desc": "token-for-consul-agent",
@@ -54,12 +67,22 @@ POLICIES: Dict[str, Dict] = {
     "vault": {
         "name": "vault-policy",
         "rules": """
-            key_prefix "vault/" { policy = "write" }
-            service    "vault"  { policy = "write" }
-            service_prefix ""   { policy = "write" }
-            session_prefix ""   { policy = "write" }
-            node_prefix    ""   { policy = "write" }
-            agent          ""   { policy = "write" }
+            # Vault Consul storage (обязательно)
+            key_prefix "vault/"                   { policy = "write" }
+            session_prefix ""                     { policy = "write" }
+
+            # Vault публикует сертификаты и статус ротации
+            key_prefix "certs/"                   { policy = "write" }
+            key_prefix "marker/vault/"            { policy = "write" }
+
+            # Vault читает глобальные конфиги/статусы
+            key_prefix "config/global/"           { policy = "read"  }
+            key_prefix "status/"                  { policy = "read"  }
+
+            # Минимально необходимое для сервис-дискавери
+            service "vault"                       { policy = "write" }
+            node_prefix ""                        { policy = "read"  }
+            query_prefix ""                       { policy = "read"  }
         """,
         "token_file": VAULT_TOKEN_FILE,
         "desc": "token-for-vault",
@@ -67,10 +90,15 @@ POLICIES: Dict[str, Dict] = {
     "traefik": {
         "name": "traefik-policy",
         "rules": """
-            node_prefix    "" { policy = "read"  }
-            query_prefix   "" { policy = "read"  }
-            agent          "" { policy = "write" }
-            service_prefix "" { policy = "write" }
+            # Traefik читает сертификаты и маркер их статуса/версии
+            key_prefix "certs/"                    { policy = "read"  }
+            key_prefix "marker/vault/certs_status" { policy = "read"  }
+            key_prefix "config/global/"            { policy = "read"  }
+
+            # Чтение каталога и нод для роутинга/health
+            node_prefix ""                         { policy = "read"  }
+            query_prefix ""                        { policy = "read"  }
+            service_prefix ""                      { policy = "read"  }
         """,
         "token_file": TRAEFIK_TOKEN_FILE,
         "desc": "token-for-traefik",
@@ -145,6 +173,9 @@ class ConsulService(ContextMicroservice):
         # 3) set agent token (once agent fully up)
         await self._apply_agent_token()
 
+        # 4) подключить KV и опубликовать маркеры готовности
+        await self._late_attach_kv_and_publish_markers(use_tls)
+
     async def start(self) -> None:
         self._set_status(ServiceStatus.RUNNING, "consul.up")
         while not getattr(self, "_shutdown").is_set():
@@ -187,11 +218,7 @@ class ConsulService(ContextMicroservice):
 
     async def _ensure_init_http(self) -> None:
         """ACL bootstrap + policies + tokens (HTTP mode). Идемпотентно."""
-        # If already bootstrapped — skip
-        if AGENT_TOKEN_FILE.exists() and ROOT_TOKEN_JSON.exists():
-            self.log.info("evt=init.skip reason=tokens.exist")
-            return
-
+        # If already bootstrapped - OK, но нам всё равно нужно upsert-политики.
         # Wait HTTP leader
         loop = asyncio.get_event_loop()
         ok = await loop.run_in_executor(None, _leader_ready, False, INIT_TIMEOUT)
@@ -199,42 +226,48 @@ class ConsulService(ContextMicroservice):
             self.log.error("evt=init.abort reason=leader.not.ready")
             return
 
-        # Bootstrap ACL
-        resp = _api("PUT", "/v1/acl/bootstrap", https=False)
-        if resp.status != 200:
-            self.log.error("evt=acl.bootstrap.fail code=%s", resp.status)
-            return
-        body = resp.read().decode("utf-8")
-        ROOT_TOKEN_JSON.write_text(body, encoding="utf-8")
-        root_token = json.loads(body).get("SecretID", "")
-        self.log.info("evt=acl.bootstrap.ok token_saved=%s", ROOT_TOKEN_JSON)
+        root_token = None
+        if ROOT_TOKEN_JSON.exists():
+            try:
+                root_token = json.loads(ROOT_TOKEN_JSON.read_text(encoding="utf-8")).get("SecretID", "")
+            except Exception:
+                root_token = None
 
-        # Policies list
-        pol_resp = _api("GET", "/v1/acl/policies", token=root_token, https=False)
-        current = set()
-        if 200 <= pol_resp.status < 300:
-            current = {p.get("Name") for p in json.loads(pol_resp.read().decode("utf-8") or "[]") if isinstance(p, dict)}
+        if not root_token:
+            # Bootstrap ACL только если нет management токена
+            resp = _api("PUT", "/v1/acl/bootstrap", https=False)
+            if resp.status != 200:
+                self.log.error("evt=acl.bootstrap.fail code=%s", resp.status)
+                return
+            body = resp.read().decode("utf-8")
+            ROOT_TOKEN_JSON.write_text(body, encoding="utf-8")
+            root_token = json.loads(body).get("SecretID", "")
+            self.log.info("evt=acl.bootstrap.ok token_saved=%s", ROOT_TOKEN_JSON)
 
-        # Ensure policies and tokens
+        # Upsert policies (всегда PUT с новыми правилами)
         for name, cfg in POLICIES.items():
-            if cfg["name"] not in current:
-                _api("PUT", "/v1/acl/policy", token=root_token, https=False, body={
-                    "Name": cfg["name"],
-                    "Description": f"auto {name}",
-                    "Rules": cfg["rules"],
-                }).read()
-                self.log.info("evt=policy.create name=%s", cfg["name"])
-            else:
-                self.log.info("evt=policy.exists name=%s", cfg["name"])
+            _api("PUT", "/v1/acl/policy", token=root_token, https=False, body={
+                "Name": cfg["name"],
+                "Description": f"auto {name}",
+                "Rules": cfg["rules"],
+            }).read()
+            self.log.info("evt=policy.upsert name=%s", cfg["name"])
 
-            t_resp = _api("PUT", "/v1/acl/token", token=root_token, https=False, body={
-                "Description": cfg["desc"],
-                "Policies": [{"Name": cfg["name"]}],
-            })
-            if 200 <= t_resp.status < 300:
-                secret = json.loads(t_resp.read().decode("utf-8") or "{}").get("SecretID", "")
-                Path(cfg["token_file"]).write_text(secret, encoding="utf-8")
-                self.log.info("evt=token.saved path=%s", cfg["token_file"])
+            # Создаём токен только если не сохранён локально
+            token_path = Path(cfg["token_file"])
+            if not token_path.exists():
+                t_resp = _api("PUT", "/v1/acl/token", token=root_token, https=False, body={
+                    "Description": cfg["desc"],
+                    "Policies": [{"Name": cfg["name"]}],
+                })
+                if 200 <= t_resp.status < 300:
+                    secret = json.loads(t_resp.read().decode("utf-8") or "{}").get("SecretID", "")
+                    token_path.write_text(secret, encoding="utf-8")
+                    self.log.info("evt=token.saved path=%s", token_path)
+                else:
+                    self.log.error("evt=token.create.fail name=%s code=%s", cfg["name"], t_resp.status)
+            else:
+                self.log.info("evt=token.exists path=%s", token_path)
 
         self.log.info("evt=init.ok")
 
@@ -256,6 +289,38 @@ class ConsulService(ContextMicroservice):
                 self.log.error("evt=agent.token.fail code=%s stderr=%s", res.returncode, res.stderr.strip() or "<empty>")
         except Exception as exc:  # noqa: BLE001
             self.log.error("evt=agent.token.error err=%s", exc)
+
+    async def _late_attach_kv_and_publish_markers(self, use_tls: bool) -> None:
+        """
+        После того как Consul встал и токены созданы - прикрепляем KV и публикуем маркеры.
+        """
+        try:
+            token = None
+            if ROOT_TOKEN_JSON.exists():
+                # Для инициализации используем management token - затем можно выдать узкий токен самому сервису
+                token = json.loads(ROOT_TOKEN_JSON.read_text(encoding="utf-8")).get("SecretID", "") or None
+            if not token:
+                log.warning("evt=kv.attach.skip reason=no.token")
+                return
+
+            kv_client = build_consul_kv_from_settings(SETTINGS, token=token)
+            kv = KV(kv_client)
+            # Присоединяем KV к deps базового сервиса
+            if getattr(self, "deps", None) is not None:
+                self.deps.kv = kv
+
+            # 1) Сообщаем об инициализации (идемпотентно)
+            kv.marker.ensure_true(kvpaths.M_CONSUL_INITIALIZED)
+
+            # 2) Если поднялись на TLS - фиксируем
+            if use_tls:
+                kv.marker.ensure_true(kvpaths.M_CONSUL_MTLS_READY)
+
+            # 3) Лидер готов => считаем каталог синхронизированным (минимальный маркер)
+            kv.marker.ensure_true(kvpaths.M_CONSUL_CATALOG_SYNCED)
+
+        except Exception as exc:  # noqa: BLE001
+            log.warning("evt=kv.attach_or_publish.fail", err=exc)
 
 
 async def main() -> None:

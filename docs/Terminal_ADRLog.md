@@ -3,15 +3,23 @@
 
 ---
 
-## [2025.09.04] ADR-010: 
+## [2025.09.15] ADR-011: Внедрение KV
+- KV (центральное хранилище ключей и значений) - единый SoT для несекретных, разделяемых и идемпотентных состояний.
+- Добавлен агрегат `KV`, адаптер `ConsulKVClient`, фасады `marker/status/cert/config`.
+- Все операции чтения/записи только через фасады `KV` (исключить прямые HTTP вызовы).
+- В `core/base/service.py` и `<svc>/app/main.py` внедрены механизмы работы с маркерами и статусами для фиксации этапов запуска и жизненного цикла сервисов.
+
+
+## [2025.09.04] ADR-010: Логирование и конфигурация
 - Введён пакет core.logging с JSON-логированием в stdout/stderr.
 - Разделение конфигурации на слои:
-  - settings.env — только настраиваемые параметры окружения, реально влияющие на перенос и поведение.
-  - docker-compose.yml — декларация сервисов и развёртывательные константы, «склейка» ${…} из settings.env.
-  - source/core/settings/settings.py — чтение/валидация/нормализация, производные значения (SAN и др.), публикация SETTINGS и CONFIG_HASH.
+  - settings.env - только настраиваемые параметры окружения, реально влияющие на перенос и поведение.
+  - docker-compose.yml - декларация сервисов и развёртывательные константы, «склейка» ${…} из settings.env.
+  - source/core/settings/settings.py - чтение/валидация/нормализация, производные значения (SAN и др.), публикация SETTINGS и CONFIG_HASH.
   - код читает параметры только через SETTINGS; доступ к сырому окружению не допускается (запрещены os.environ, os.getenv); "паспорт" экземпляра сервиса находятся в SETTINGS.context.
-  - сервисные конфиги (consul_*.hcl, vault_*.hcl, traefik.yml) — локальная логика конкретного сервиса, могут требовать обязательные ключи окружения.
-- PKI в Vault параметризована путями монтирования: VAULT_PKI_ROOT_PATH и VAULT_PKI_INT_PATH. Бутстрап Vault всегда по HTTP, далее — mTLS. Листовые сертификаты теперь пишутся как fullchain (leaf + chain) в *.crt; корень — ca.crt. Это устранило ошибки x509: certificate signed by unknown authority.
+  - сервисные конфиги (consul_*.hcl, vault_*.hcl, traefik.yml) - локальная логика конкретного сервиса, могут требовать обязательные ключи окружения.
+- PKI в Vault параметризована путями монтирования: VAULT_PKI_ROOT_PATH и VAULT_PKI_INT_PATH. Бутстрап Vault всегда по HTTP, далее - mTLS. Листовые сертификаты теперь пишутся как fullchain (leaf + chain) в *.crt; корень - ca.crt. Это устранило ошибки x509: certificate signed by unknown authority.
+
 
 ## [2025.08.24] ADR-009: Уточнение базовых каркасов и деление ядра
 - Каркас сервиса BaseService упразднён как дублирующий. Теперь используются базовые каркасы ContextMicroservice (service.py), ExternalServiceAdapter (adapter.py) и Module (module.py).
@@ -19,6 +27,7 @@
 - Единый healthcheck-скрипт /core/runtime/health_check.py и формат здоровья.
 - Docker Compose: общие healthchecks, `SERVICE_HEALTH_FILE=/run/terminal/health/<svc>.json`.
 - Структура core/* (runtime/infra/observability/net/settings).
+
 
 ## [2025.07.21] ADR-008: Внедрение mTLS для внутренних сервисов
 - Для защиты взаимодействия Vault, Consul и Traefik внедрён mTLS.
