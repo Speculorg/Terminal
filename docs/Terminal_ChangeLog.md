@@ -4,7 +4,7 @@
 ---
 
 
-## [2025.09.17]: Пакет-агрегатор core/net
+## [2025.09.17]: TLS Hot-Reload интерфейс
 - `source/core/runtime/tls_reload.py` - новый интерфейс "горячей" перезагрузки TLS-материалов.
 - `source/core/base/service.py` - добавлены зависимость tls_reloader, фоновый вотчер версии, вызов hot-reload.
 
