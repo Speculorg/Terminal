@@ -23,7 +23,7 @@ from core.metrics.registry import registry as metrics_registry
 from core.metrics.registry import Counter, Gauge, Registry
 from core.infra.registrars.base import Registrar
 from core.infra.registrars.consul import ConsulRegistrar
-from core.net.url import build_url, fqdn
+from core.net import build_url, fqdn
 
 # KV фасад (агрегат)
 try:

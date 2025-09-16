@@ -3,20 +3,28 @@
 
 ---
 
+## [2025.09.17]: Пакет-агрегатор core/net
+- `source/core/net/__init__.py` - пакет агрегирует реализацию в `core/net/url.py` и делает единый публичный импорт.
+- `source/core/base/service.py` - строка импорта `from core.net import build_url, fqdn`.
+
+
 ## [2025.09.16]: Разделение ответственности статусов
 - `source/core/kv/status.py` - добавлен метод update(svc, status, meta) - устанавливает phase и status, поддерживая service/ts/meta. Старые методы set_phase и set_status оставлены для плавной миграции.
 - `source/core/base/service.py` - вместо двух вызовов kv.status.set_phase(...) и kv.status.set_status(...) теперь один вызов kv.status.update(...).
+
 
 ## [2025.09.16]: Усиление DIP для KV
 - `source/core/kv/consul.py` - добавлен агрегатный конструктор build_kv поверх build_consul_kv_from_settings
 - `source/core/kv/__init__.py` - добавлен импорт/экспорт build_kv
 - `source/core/base/service.py` - добавлен блок _kv_required() и проверка в начале serve()
 
+
 ## [2025.09.16]: Перенос observability в metrics
 - `core/observability/metrics.py` - удалён
 - `core/metrics/registry.py` - перенесли логику из metrics.py
 - `core/metrics/__init.py__` - новый
 - `source\core\base\service.py` - перенастроили импорт
+
 
 ## [2025.09.15]: Внедрение KV
 - `core/kv`: добавлен агрегат `KV`, адаптер `ConsulKVClient`, фасады `marker`/`status`/`cert`/`config`.
