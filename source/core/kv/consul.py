@@ -2,11 +2,14 @@
 
 """
 core.kv.consul
-
 Минималистичный клиент Consul KV (HTTP/HTTPS, mTLS).
 - get_raw -> (value, ModifyIndex)
 - put_raw -> CAS (?cas=ModifyIndex)
 - Встроенный backoff и повторное подключение по необходимости.
+
+Дополнительно:
+- build_consul_kv_from_settings(SETTINGS, token) -> ConsulKVClient  (низкоуровневый клиент)
+- build_kv(SETTINGS, token) -> KV (агрегат с фасадами marker/status/cert/config)
 """
 
 from __future__ import annotations
@@ -18,7 +21,7 @@ import ssl
 from dataclasses import dataclass
 from typing import Any, Optional, Tuple
 
-from .base import KVClient, KVEntry
+from .base import KVClient, KVEntry, KV
 from core.logging import get_logger
 
 log = get_logger("kv.consul")
@@ -174,7 +177,7 @@ class ConsulKVClient(KVClient):
         return self.put_text(key, s, cas=cas)
 
 
-# ---- Factory ----
+# ---- Factory (client) ----
 def build_consul_kv_from_settings(SETTINGS: Any, token: Optional[str] = None) -> ConsulKVClient:
     """
     Конструктор из core.settings.SETTINGS.
@@ -191,3 +194,12 @@ def build_consul_kv_from_settings(SETTINGS: Any, token: Optional[str] = None) ->
         host=host, http_port=http_port, https_port=https_port, tls=tls,
         ca_file=ca_file, cert_file=cert_file, key_file=key_file, token=token
     )
+
+
+# ---- Factory (aggregate) ----
+def build_kv(SETTINGS: Any, token: Optional[str] = None) -> KV:
+    """
+    Высокоуровневая фабрика: возвращает агрегат KV с фасадами marker/status/cert/config.
+    """
+    client = build_consul_kv_from_settings(SETTINGS, token=token)
+    return KV(client)

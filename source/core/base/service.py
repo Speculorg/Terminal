@@ -1,4 +1,4 @@
-# source/core/base/service.py
+# source\core\base\service.py
 
 """
 Speculorg.Terminal.Core.Base.ContextMicroservice
@@ -118,6 +118,10 @@ class ContextMicroservice:
 
     # ----------------------------- Оркестратор -----------------------------
 
+    def _kv_required(self) -> bool:
+        # consul/vault могут стартовать без внешнего KV в фазе bootstrap
+        return self._svc_name not in {"consul", "vault"}
+
     async def serve(self) -> None:
         install_signal_shutdown_flag(self._shutdown, on_signal=self._on_signal)
 
@@ -126,6 +130,11 @@ class ContextMicroservice:
             self._set_status(ServiceStatus.BOOTSTRAPPING, "entry")
             self._tick_health.start()
             self._tick_metrics.start()
+
+            # Требование KV (для всех, кроме consul/vault)
+            if self._kv_required() and getattr(self.deps, "kv", None) is None:
+                self.log.error("evt=deps.kv.missing svc=%s", self._svc_name)
+                raise RuntimeError("KV dependency is required for this service (inject via ContextMicroserviceDeps.kv)")
 
             # Публикация CONFIG_HASH/DOMAIN_ROOT в KV (идемпотентно)
             self._publish_config_hash_once()

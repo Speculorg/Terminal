@@ -1,7 +1,12 @@
 
-# Журнал изменений Speculorg.Terminal (MVP)
+# Журнал изменений (ChangeLog) Speculorg.Terminal (MVP)
 
 ---
+
+## [2025.09.16]: Усиление DIP для KV
+- `source/core/kv/consul.py` - добавлен агрегатный конструктор build_kv поверх build_consul_kv_from_settings
+- `source/core/kv/__init__.py` - добавлен импорт/экспорт build_kv
+- `source/core/base/service.py` - добавлен блок _kv_required() и проверка в начале serve()
 
 ## [2025.09.16]: Перенос observability в metrics
 - `core/observability/metrics.py` - удалён
