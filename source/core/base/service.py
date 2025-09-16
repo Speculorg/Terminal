@@ -24,7 +24,7 @@ from core.metrics.registry import registry as metrics_registry
 from core.metrics.registry import Counter, Gauge, Registry
 from core.infra.registrars.base import Registrar
 from core.infra.registrars.consul import ConsulRegistrar
-from core.net import build_url, fqdn  # агрегатор сети
+from core.net import build_url, fqdn
 
 # KV фасад (агрегат)
 try:
@@ -65,7 +65,7 @@ class ContextMicroservice:
     def __init__(self, deps: Optional[ContextMicroserviceDeps] = None) -> None:
         self.deps = deps or ContextMicroserviceDeps()
 
-        # Паспорт сервиса — из SETTINGS.context
+        # Паспорт сервиса - из SETTINGS.context
         self._svc_name: str = SETTINGS.context.name
         self._svc_port: int = SETTINGS.context.port
         self._svc_tags: list[str] = list(SETTINGS.context.tags)
@@ -79,10 +79,7 @@ class ContextMicroservice:
                 tags=list(self._svc_tags),
             )
 
-        # Логер: get_logger(service=...) автоматически добавляет поле svc
-        # (см. source/core/logging/__init__.py и json_logger.py)
         self.log = get_logger(self._svc_name)
-
         self._shutdown = asyncio.Event()
         self._status: ServiceStatus = ServiceStatus.BOOTSTRAPPING
         self._health = HealthSnapshot()
@@ -163,11 +160,15 @@ class ContextMicroservice:
             # INIT
             self._set_status(ServiceStatus.INITIALIZING, "initialize()")
             await self.initialize()
+            # Маркер инициализации сервиса
+            self._ensure_marker("initialized")
 
             # REGISTER
             self._set_status(ServiceStatus.REGISTERING, "registrar.register()")
             if self.deps.registrar:
                 await self.deps.registrar.register()
+            # Маркер регистрации сервиса
+            self._ensure_marker("registered")
 
             # RUN
             self._set_status(ServiceStatus.RUNNING, "start()")
@@ -176,7 +177,6 @@ class ContextMicroservice:
         except Exception as exc:  # noqa: BLE001
             self._m_errors_total.inc(labels={"svc": self._svc_name})
             self._set_status(ServiceStatus.ERROR, f"fatal:{type(exc).__name__}")
-            # унифицированное поле err (кроме trace в logger.exception)
             self.log.exception("err=unhandled")
             raise
         finally:
@@ -216,7 +216,6 @@ class ContextMicroservice:
             "from": prev.value if hasattr(prev, "value") else str(prev),
             "to": st.value,
         })
-        # Лог: добавляем phase, оставляя совместимое поле st
         self.log.info(
             "evt=status.change",
             svc=self._svc_name,
@@ -233,7 +232,6 @@ class ContextMicroservice:
             try:
                 kv.status.update(self._svc_name, st, meta={"reasons": list(reasons) if reasons else []})
             except Exception as exc:  # noqa: BLE001
-                # только лог + метрика, не валим сервис при временных KV проблемах
                 self._m_kv_status_update_fail.inc(labels={"svc": self._svc_name})
                 self.log.warning("evt=kv.status.update.fail", svc=self._svc_name, phase=st.value, err=exc)
 
@@ -252,7 +250,7 @@ class ContextMicroservice:
         except Exception as exc:  # noqa: BLE001
             self.log.warning("evt=health.write.fail", svc=self._svc_name, err=exc)
 
-        # Параллельно — heartbeat в KV
+        # Параллельно - heartbeat в KV
         kv = getattr(self.deps, "kv", None)
         if kv is not None:
             try:
@@ -268,7 +266,7 @@ class ContextMicroservice:
         self._g_tls_active.set(1.0 if self._tls_active else 0.0, labels={"svc": self._svc_name})
         self.log.info("evt=tls.state", svc=self._svc_name, active=1 if active else 0, phase=self._status.value)
 
-        # Быстрый heartbeat в KV при смене TLS
+        # Быстрый heartbeat + маркер mTLS
         kv = getattr(self.deps, "kv", None)
         if kv is not None:
             try:
@@ -276,6 +274,8 @@ class ContextMicroservice:
             except Exception as exc:  # noqa: BLE001
                 self._m_kv_heartbeat_fail.inc(labels={"svc": self._svc_name})
                 self.log.warning("evt=kv.heartbeat.fail", svc=self._svc_name, err=exc)
+            if self._tls_active:
+                self._ensure_marker("mtls_ready")
 
     def svc_url(self, host: str, port_http: int, port_https: int, path: str = "") -> str:
         return build_url(host, port_http, port_https, path, tls=self._tls_active)
@@ -377,3 +377,18 @@ class ContextMicroservice:
                 self.log.warning("evt=kv.domain_root.write.false", svc=self._svc_name)
         except Exception as exc:  # noqa: BLE001
             self.log.warning("evt=kv.publish_config.fail", svc=self._svc_name, err=exc)
+
+    # ----------------------------- Markers helpers -----------------------------
+
+    def _ensure_marker(self, flag: str) -> None:
+        """
+        Универсальная постановка маркера marker/<svc>/<flag> (идемпотентно, best-effort).
+        """
+        kv = getattr(self.deps, "kv", None)
+        if kv is None:
+            return
+        try:
+            kv.marker.svc(self._svc_name).flag(flag).ensure()
+            self.log.info("evt=marker.ensure", svc=self._svc_name, flag=flag)
+        except Exception as exc:  # noqa: BLE001
+            self.log.warning("evt=marker.ensure.fail", svc=self._svc_name, flag=flag, err=exc)

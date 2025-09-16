@@ -8,7 +8,7 @@
 - `source/core/kv/markers.py` - реализовали желаемый интерфейс вида KV.marker.consul.initialized и сохранили существующие generic-методы.
 - `source/core/kv/configs.py` - глобальные ключи и ключи per-service формируются строго через paths.py (единый нейминг).
 - `source/core/kv/certs.py` - ключи certs/* и marker/vault/certs_status формируются строго через paths.py. publish_bundle() синхронно обновляет и JSON-маркер, и "простую" версию (строка), которую уже читает наш TLS-watcher в каркасе сервиса.
-- `source/core/base/service.py` - ...
+- `source/core/base/service.py` - gодключили запись маркеров в каркасе ContextMicroservice в правильные фазы.
 
 
 ## [2025.09.17]: Унификация логирования и метрик в каркасе ContextMicroservice

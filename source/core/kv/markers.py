@@ -3,16 +3,14 @@
 """
 core.kv.markers
 Фасад для маркеров (идемпотентные флажки) с подпространствами:
-- KV.marker.consul.initialized.ensure()
-- KV.marker.vault.pki_root_ready.ensure()
-- KV.marker.traefik.registered.ensure()
-и т. п.
+- Специализированные: KV.marker.consul.*, KV.marker.vault.*, KV.marker.traefik.*
+- Универсальные для любого сервиса: KV.marker.svc("<name>").initialized/registered/mtls_ready
 
 Все записи выполняются через CAS с backoff.
 """
 
 from __future__ import annotations
-from typing import Any, Dict, Optional, Tuple, Callable
+from typing import Any, Dict, Optional, Tuple
 
 from .base import KV
 from . import paths
@@ -29,7 +27,8 @@ class _BoolMarker:
     Объект-обёртка над конкретным bool-маркером.
     Пример использования:
         KV.marker.consul.initialized.ensure()
-        val, idx = KV.marker.vault.pki_root_ready.get()
+        KV.marker.vault.pki_root_ready.ensure()
+        KV.marker.svc("gateway").registered.ensure()
     """
 
     def __init__(self, kv: KV, key_marker: str) -> None:
@@ -56,7 +55,44 @@ class _BoolMarker:
         return self._get_json_both_prefixes()
 
 
-# ----------------------------- Подпространства для сервисов -----------------------------
+# ----------------------------- Универсальные маркеры для любого сервиса -----------------------------
+
+def _svc_flag_key(svc: str, flag: str) -> str:
+    """
+    Генерация ключа маркера в неймспейсе marker/<svc>/<flag>.
+    Если появится фабрика путей в paths, плавно переключимся на неё.
+    """
+    mk = getattr(paths, "marker_svc_flag", None)
+    if callable(mk):
+        return mk(svc, flag)  # type: ignore[misc]
+    return f"{paths.MARKER}/{svc}/{flag}"
+
+
+class _GenericSvcMarkers:
+    """
+    Неймспейс для произвольного сервиса:
+        ns = KV.marker.svc("gateway")
+        ns.initialized.ensure()
+        ns.registered.ensure()
+        ns.mtls_ready.ensure()
+        # а также любые нестандартные флаги:
+        ns.flag("catalog_synchronized").ensure()
+    """
+
+    def __init__(self, kv: KV, svc: str) -> None:
+        self._kv = kv
+        self._svc = svc
+        # Предопределённые флаги
+        self.initialized = _BoolMarker(kv, _svc_flag_key(svc, "initialized"))
+        self.registered = _BoolMarker(kv, _svc_flag_key(svc, "registered"))
+        self.mtls_ready = _BoolMarker(kv, _svc_flag_key(svc, "mtls_ready"))
+
+    def flag(self, name: str) -> _BoolMarker:
+        """Произвольный флаг в пространстве marker/<svc>/<name>."""
+        return _BoolMarker(self._kv, _svc_flag_key(self._svc, name))
+
+
+# ----------------------------- Подпространства для конкретных сервисов -----------------------------
 
 class _ConsulMarkers:
     def __init__(self, kv: KV) -> None:
@@ -106,7 +142,7 @@ class _VaultMarkers:
 
     @property
     def _kv(self) -> KV:
-        # небольшой хак: берём kv из одного из _BoolMarker (initialized)
+        # берём kv из одного из _BoolMarker (initialized)
         return self.initialized._kv  # type: ignore[attr-defined]
 
 
@@ -125,6 +161,7 @@ class MarkersFacade:
         KV.marker.consul.initialized.ensure()
         KV.marker.vault.pki_root_ready.ensure()
         KV.marker.traefik.registered.ensure()
+        KV.marker.svc("<name>").initialized.ensure()
     Сохранены и generic-методы для совместимости.
     """
 
@@ -134,6 +171,11 @@ class MarkersFacade:
         self.consul = _ConsulMarkers(kv)
         self.vault = _VaultMarkers(kv)
         self.traefik = _TraefikMarkers(kv)
+
+    # ----- Универсальный неймспейс для любого сервиса -----
+
+    def svc(self, name: str) -> _GenericSvcMarkers:
+        return _GenericSvcMarkers(self._kv, name)
 
     # ----- generic helpers (совместимость) -----
 
