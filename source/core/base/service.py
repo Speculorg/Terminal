@@ -60,7 +60,7 @@ class ContextMicroservice:
     def __init__(self, deps: Optional[ContextMicroserviceDeps] = None) -> None:
         self.deps = deps or ContextMicroserviceDeps()
 
-        # Паспорт сервиса - из SETTINGS.context
+        # Паспорт сервиса — из SETTINGS.context
         self._svc_name: str = SETTINGS.context.name
         self._svc_port: int = SETTINGS.context.port
         self._svc_tags: list[str] = list(SETTINGS.context.tags)
@@ -200,12 +200,11 @@ class ContextMicroservice:
             reason=";".join(reasons) if reasons else "-",
         )
 
-        # Отразить фазу/статус в KV (идемпотентно через CAS)
+        # ЕДИНАЯ точка записи статуса/фазы в KV
         kv = getattr(self.deps, "kv", None)
         if kv is not None:
             try:
-                kv.status.set_phase(self._svc_name, st.value, meta={"reasons": list(reasons) if reasons else []})
-                kv.status.set_status(self._svc_name, st)
+                kv.status.update(self._svc_name, st, meta={"reasons": list(reasons) if reasons else []})
             except Exception as exc:  # noqa: BLE001
                 # только лог, не валим сервис при временных KV проблемах
                 self.log.warning("evt=kv.status.update.fail", err=exc)
@@ -225,7 +224,7 @@ class ContextMicroservice:
         except Exception as exc:  # noqa: BLE001
             self.log.warning("evt=health.write.fail", err=exc)
 
-        # Параллельно - heartbeat в KV
+        # Параллельно — heartbeat в KV
         kv = getattr(self.deps, "kv", None)
         if kv is not None:
             try:
@@ -240,7 +239,7 @@ class ContextMicroservice:
         self._g_tls_active.set(1.0 if self._tls_active else 0.0, labels={"svc": self._svc_name})
         self.log.info("evt=tls.state", active=1 if active else 0)
 
-        # Ради полноты - быстрый heartbeat в KV при смене TLS
+        # Быстрый heartbeat в KV при смене TLS
         kv = getattr(self.deps, "kv", None)
         if kv is not None:
             try:

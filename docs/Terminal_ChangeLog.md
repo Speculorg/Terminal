@@ -3,6 +3,10 @@
 
 ---
 
+## [2025.09.16]: Разделение ответственности статусов
+- `source/core/kv/status.py` - добавлен метод update(svc, status, meta) - устанавливает phase и status, поддерживая service/ts/meta. Старые методы set_phase и set_status оставлены для плавной миграции.
+- `source/core/base/service.py` - вместо двух вызовов kv.status.set_phase(...) и kv.status.set_status(...) теперь один вызов kv.status.update(...).
+
 ## [2025.09.16]: Усиление DIP для KV
 - `source/core/kv/consul.py` - добавлен агрегатный конструктор build_kv поверх build_consul_kv_from_settings
 - `source/core/kv/__init__.py` - добавлен импорт/экспорт build_kv
