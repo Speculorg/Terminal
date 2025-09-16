@@ -3,6 +3,12 @@
 
 ---
 
+
+## [2025.09.17]: Пакет-агрегатор core/net
+- `source/core/runtime/tls_reload.py` - новый интерфейс "горячей" перезагрузки TLS-материалов.
+- `source/core/base/service.py` - добавлены зависимость tls_reloader, фоновый вотчер версии, вызов hot-reload.
+
+
 ## [2025.09.17]: Пакет-агрегатор core/net
 - `source/core/net/__init__.py` - пакет агрегирует реализацию в `core/net/url.py` и делает единый публичный импорт.
 - `source/core/base/service.py` - строка импорта `from core.net import build_url, fqdn`.

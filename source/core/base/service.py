@@ -18,18 +18,21 @@ from core.settings.settings import SETTINGS, CONFIG_HASH
 from core.runtime.status import ServiceStatus, HealthSnapshot
 from core.runtime.health_io import write_health
 from core.runtime.lifecycle import install_signal_shutdown_flag, Periodic
+from core.runtime.tls_reload import TLSReloader
 from core.logging import get_logger
 from core.metrics.registry import registry as metrics_registry
 from core.metrics.registry import Counter, Gauge, Registry
 from core.infra.registrars.base import Registrar
 from core.infra.registrars.consul import ConsulRegistrar
-from core.net import build_url, fqdn
+from core.net import build_url, fqdn  # агрегатор сети
 
 # KV фасад (агрегат)
 try:
     from core.kv import KV  # type: ignore
+    from core.kv import paths as kv_paths  # для чтения версий/маркеров
 except Exception:  # pragma: no cover
     KV = None  # type: ignore[misc]
+    kv_paths = None  # type: ignore[misc]
 
 
 # ----------------------------- Dependencies (DIP) -----------------------------
@@ -40,6 +43,7 @@ class ContextMicroserviceDeps:
     health_file: Path = Path(SETTINGS.context.health_file)
     metrics: Registry = metrics_registry()
     kv: Optional[KV] = None  # type: ignore
+    tls_reloader: Optional[TLSReloader] = None  # << новый зависимый объект
 
 
 # ----------------------------- ContextMicroservice -----------------------------
@@ -56,6 +60,7 @@ class ContextMicroservice:
 
     write_health_every_sec: float = 5.0
     update_metrics_every_sec: float = 15.0
+    tls_watch_every_sec: float = 10.0  # период опроса версии TLS-бандла
 
     def __init__(self, deps: Optional[ContextMicroserviceDeps] = None) -> None:
         self.deps = deps or ContextMicroserviceDeps()
@@ -90,8 +95,12 @@ class ContextMicroservice:
         self._g_tls_active:     Gauge   = self._mx.gauge("svc_tls_active", "TLS active flag (0/1)")
 
         # Периодические фоновые задачи
-        self._tick_health = Periodic(self.write_health_every_sec, self._write_health_tick)
+        self._tick_health = Periodic(self.write_health_every_sec, self._write_health_tick)  # :contentReference[oaicite:1]{index=1}
         self._tick_metrics = Periodic(self.update_metrics_every_sec, self._update_metrics_tick)
+        self._tick_tls_watch = Periodic(self.tls_watch_every_sec, self._tls_watch_tick)
+
+        # Версия TLS-бандла, известная сервису (для детекта смены)
+        self._last_cert_version: Optional[str] = None
 
     # ----------------------------- Переопределяемые хуки -----------------------------
 
@@ -130,6 +139,7 @@ class ContextMicroservice:
             self._set_status(ServiceStatus.BOOTSTRAPPING, "entry")
             self._tick_health.start()
             self._tick_metrics.start()
+            self._tick_tls_watch.start()  # включаем монитор версий TLS
 
             # Требование KV (для всех, кроме consul/vault)
             if self._kv_required() and getattr(self.deps, "kv", None) is None:
@@ -167,6 +177,7 @@ class ContextMicroservice:
             await self._write_health_tick()
             await self._tick_health.stop()
             await self._tick_metrics.stop()
+            await self._tick_tls_watch.stop()
             self.log.info("stopped")
 
     # ----------------------------- Health / Status -----------------------------
@@ -260,6 +271,47 @@ class ContextMicroservice:
 
     def metrics_text(self) -> str:
         return self._mx.render_prometheus()
+
+    # ----------------------------- TLS Version Watcher -----------------------------
+
+    async def _tls_watch_tick(self) -> None:
+        """
+        Периодически читает версию TLS-бандла из KV и, если версия изменилась,
+        инициирует hot-reload через deps.tls_reloader.
+        Приоритет источников:
+          1) certs/version (plain text),
+          2) marker/vault/certs_status.version (JSON).
+        """
+        if not getattr(self.deps, "kv", None) or kv_paths is None:
+            return
+
+        ver = None
+        try:
+            # 1) Простая версия (text)
+            ver, _ = self.deps.kv.get_text(kv_paths.CERTS_VERSION)  # :contentReference[oaicite:2]{index=2}
+            if not ver:
+                # 2) Маркерный JSON
+                js, _ = self.deps.kv.get_json(kv_paths.CERTS_STATUS)  # :contentReference[oaicite:3]{index=3}
+                if isinstance(js, dict) and "version" in js:
+                    ver = str(js.get("version") or "").strip()
+        except Exception as exc:  # noqa: BLE001
+            self.log.warning("evt=tls.version.read.fail", err=exc)
+            return
+
+        if not ver:
+            return
+
+        if ver != self._last_cert_version:
+            prev = self._last_cert_version or "-"
+            self._last_cert_version = ver
+            self.log.info("evt=tls.cert.version.change prev=%s next=%s", prev, ver)
+            reloader = getattr(self.deps, "tls_reloader", None)
+            if reloader:
+                try:
+                    reloader.notify_version(ver)
+                    self.log.info("evt=tls.reload.requested version=%s", ver)
+                except Exception as exc:  # noqa: BLE001
+                    self.log.warning("evt=tls.reload.fail version=%s err=%s", ver, exc)
 
     # ----------------------------- Shutdown / Signals -----------------------------
 
