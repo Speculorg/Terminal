@@ -43,7 +43,7 @@ class ContextMicroserviceDeps:
     health_file: Path = Path(SETTINGS.context.health_file)
     metrics: Registry = metrics_registry()
     kv: Optional[KV] = None  # type: ignore
-    tls_reloader: Optional[TLSReloader] = None  # << новый зависимый объект
+    tls_reloader: Optional[TLSReloader] = None
 
 
 # ----------------------------- ContextMicroservice -----------------------------
@@ -79,23 +79,34 @@ class ContextMicroservice:
                 tags=list(self._svc_tags),
             )
 
+        # Логер: get_logger(service=...) автоматически добавляет поле svc
+        # (см. source/core/logging/__init__.py и json_logger.py)
         self.log = get_logger(self._svc_name)
+
         self._shutdown = asyncio.Event()
         self._status: ServiceStatus = ServiceStatus.BOOTSTRAPPING
         self._health = HealthSnapshot()
         self._tls_active: bool = False
         self._child = None  # subprocess.Popen | None
 
-        # Метрики
+        # ----------------------------- Метрики (минимальный стандарт) -----------------------------
         self._mx: Registry = self.deps.metrics
+        # Служебные/общие:
         self._m_status_changes: Counter = self._mx.counter("svc_status_changes_total", "Service status transitions")
         self._m_errors_total:   Counter = self._mx.counter("svc_errors_total", "Unhandled errors")
         self._m_restarts_total: Counter = self._mx.counter("svc_restart_requests_total", "Requested restarts")
         self._g_uptime_seconds: Gauge   = self._mx.gauge("svc_uptime_seconds", "Service uptime in seconds")
         self._g_tls_active:     Gauge   = self._mx.gauge("svc_tls_active", "TLS active flag (0/1)")
+        # KV / Registrar / TLS-watch:
+        self._m_kv_status_update_fail: Counter = self._mx.counter("kv_status_update_fail_total", "KV status update failures")
+        self._m_kv_heartbeat_fail:     Counter = self._mx.counter("kv_heartbeat_fail_total", "KV heartbeat write failures")
+        self._m_reg_deregister_fail:    Counter = self._mx.counter("registrar_deregister_fail_total", "Registrar deregister failures")
+        self._m_tls_version_changes:    Counter = self._mx.counter("tls_version_changes_total", "TLS bundle version changes detected")
+        self._m_tls_reload_requests:    Counter = self._mx.counter("tls_reload_requests_total", "TLS hot-reload requests issued")
+        self._m_tls_reload_fail:        Counter = self._mx.counter("tls_reload_fail_total", "TLS hot-reload failures")
 
         # Периодические фоновые задачи
-        self._tick_health = Periodic(self.write_health_every_sec, self._write_health_tick)  # :contentReference[oaicite:1]{index=1}
+        self._tick_health = Periodic(self.write_health_every_sec, self._write_health_tick)
         self._tick_metrics = Periodic(self.update_metrics_every_sec, self._update_metrics_tick)
         self._tick_tls_watch = Periodic(self.tls_watch_every_sec, self._tls_watch_tick)
 
@@ -139,11 +150,11 @@ class ContextMicroservice:
             self._set_status(ServiceStatus.BOOTSTRAPPING, "entry")
             self._tick_health.start()
             self._tick_metrics.start()
-            self._tick_tls_watch.start()  # включаем монитор версий TLS
+            self._tick_tls_watch.start()
 
             # Требование KV (для всех, кроме consul/vault)
             if self._kv_required() and getattr(self.deps, "kv", None) is None:
-                self.log.error("evt=deps.kv.missing svc=%s", self._svc_name)
+                self.log.error("evt=deps.kv.missing", svc=self._svc_name)
                 raise RuntimeError("KV dependency is required for this service (inject via ContextMicroserviceDeps.kv)")
 
             # Публикация CONFIG_HASH/DOMAIN_ROOT в KV (идемпотентно)
@@ -165,6 +176,7 @@ class ContextMicroservice:
         except Exception as exc:  # noqa: BLE001
             self._m_errors_total.inc(labels={"svc": self._svc_name})
             self._set_status(ServiceStatus.ERROR, f"fatal:{type(exc).__name__}")
+            # унифицированное поле err (кроме trace в logger.exception)
             self.log.exception("err=unhandled")
             raise
         finally:
@@ -172,13 +184,14 @@ class ContextMicroservice:
                 if self.deps.registrar:
                     await self.deps.registrar.deregister()
             except Exception as exc:  # noqa: BLE001
-                self.log.warning("registrar.deregister.failed", err=exc)
+                self._m_reg_deregister_fail.inc(labels={"svc": self._svc_name})
+                self.log.warning("evt=registrar.deregister.failed", svc=self._svc_name, err=exc)
             await self._before_stop()
             await self._write_health_tick()
             await self._tick_health.stop()
             await self._tick_metrics.stop()
             await self._tick_tls_watch.stop()
-            self.log.info("stopped")
+            self.log.info("evt=stopped", svc=self._svc_name)
 
     # ----------------------------- Health / Status -----------------------------
 
@@ -203,8 +216,11 @@ class ContextMicroservice:
             "from": prev.value if hasattr(prev, "value") else str(prev),
             "to": st.value,
         })
+        # Лог: добавляем phase, оставляя совместимое поле st
         self.log.info(
             "evt=status.change",
+            svc=self._svc_name,
+            phase=st.value,
             st=st.value,
             prev=getattr(prev, "value", str(prev)),
             tls=1 if self._tls_active else 0,
@@ -217,8 +233,9 @@ class ContextMicroservice:
             try:
                 kv.status.update(self._svc_name, st, meta={"reasons": list(reasons) if reasons else []})
             except Exception as exc:  # noqa: BLE001
-                # только лог, не валим сервис при временных KV проблемах
-                self.log.warning("evt=kv.status.update.fail", err=exc)
+                # только лог + метрика, не валим сервис при временных KV проблемах
+                self._m_kv_status_update_fail.inc(labels={"svc": self._svc_name})
+                self.log.warning("evt=kv.status.update.fail", svc=self._svc_name, phase=st.value, err=exc)
 
     def svc_health_snapshot(self) -> dict:
         snap = self._health.to_dict()
@@ -233,7 +250,7 @@ class ContextMicroservice:
         try:
             write_health(self.svc_health_snapshot(), self.deps.health_file)
         except Exception as exc:  # noqa: BLE001
-            self.log.warning("evt=health.write.fail", err=exc)
+            self.log.warning("evt=health.write.fail", svc=self._svc_name, err=exc)
 
         # Параллельно — heartbeat в KV
         kv = getattr(self.deps, "kv", None)
@@ -241,14 +258,15 @@ class ContextMicroservice:
             try:
                 kv.status.heartbeat(self._svc_name, tls_active=self._tls_active)
             except Exception as exc:  # noqa: BLE001
-                self.log.warning("evt=kv.heartbeat.fail", err=exc)
+                self._m_kv_heartbeat_fail.inc(labels={"svc": self._svc_name})
+                self.log.warning("evt=kv.heartbeat.fail", svc=self._svc_name, err=exc)
 
     # ----------------------------- TLS / URL helpers -----------------------------
 
     def svc_set_tls_active(self, active: bool) -> None:
         self._tls_active = bool(active)
         self._g_tls_active.set(1.0 if self._tls_active else 0.0, labels={"svc": self._svc_name})
-        self.log.info("evt=tls.state", active=1 if active else 0)
+        self.log.info("evt=tls.state", svc=self._svc_name, active=1 if active else 0, phase=self._status.value)
 
         # Быстрый heartbeat в KV при смене TLS
         kv = getattr(self.deps, "kv", None)
@@ -256,7 +274,8 @@ class ContextMicroservice:
             try:
                 kv.status.heartbeat(self._svc_name, tls_active=self._tls_active, meta={"evt": "tls_active_changed"})
             except Exception as exc:  # noqa: BLE001
-                self.log.warning("evt=kv.heartbeat.fail", err=exc)
+                self._m_kv_heartbeat_fail.inc(labels={"svc": self._svc_name})
+                self.log.warning("evt=kv.heartbeat.fail", svc=self._svc_name, err=exc)
 
     def svc_url(self, host: str, port_http: int, port_https: int, path: str = "") -> str:
         return build_url(host, port_http, port_https, path, tls=self._tls_active)
@@ -278,9 +297,6 @@ class ContextMicroservice:
         """
         Периодически читает версию TLS-бандла из KV и, если версия изменилась,
         инициирует hot-reload через deps.tls_reloader.
-        Приоритет источников:
-          1) certs/version (plain text),
-          2) marker/vault/certs_status.version (JSON).
         """
         if not getattr(self.deps, "kv", None) or kv_paths is None:
             return
@@ -288,14 +304,14 @@ class ContextMicroservice:
         ver = None
         try:
             # 1) Простая версия (text)
-            ver, _ = self.deps.kv.get_text(kv_paths.CERTS_VERSION)  # :contentReference[oaicite:2]{index=2}
+            ver, _ = self.deps.kv.get_text(kv_paths.CERTS_VERSION)
             if not ver:
                 # 2) Маркерный JSON
-                js, _ = self.deps.kv.get_json(kv_paths.CERTS_STATUS)  # :contentReference[oaicite:3]{index=3}
+                js, _ = self.deps.kv.get_json(kv_paths.CERTS_STATUS)
                 if isinstance(js, dict) and "version" in js:
                     ver = str(js.get("version") or "").strip()
         except Exception as exc:  # noqa: BLE001
-            self.log.warning("evt=tls.version.read.fail", err=exc)
+            self.log.warning("evt=tls.version.read.fail", svc=self._svc_name, err=exc)
             return
 
         if not ver:
@@ -304,30 +320,33 @@ class ContextMicroservice:
         if ver != self._last_cert_version:
             prev = self._last_cert_version or "-"
             self._last_cert_version = ver
-            self.log.info("evt=tls.cert.version.change prev=%s next=%s", prev, ver)
+            self._m_tls_version_changes.inc(labels={"svc": self._svc_name})
+            self.log.info("evt=tls.cert.version.change", svc=self._svc_name, prev=prev, next=ver, phase=self._status.value)
             reloader = getattr(self.deps, "tls_reloader", None)
             if reloader:
                 try:
                     reloader.notify_version(ver)
-                    self.log.info("evt=tls.reload.requested version=%s", ver)
+                    self._m_tls_reload_requests.inc(labels={"svc": self._svc_name})
+                    self.log.info("evt=tls.reload.requested", svc=self._svc_name, version=ver, phase=self._status.value)
                 except Exception as exc:  # noqa: BLE001
-                    self.log.warning("evt=tls.reload.fail version=%s err=%s", ver, exc)
+                    self._m_tls_reload_fail.inc(labels={"svc": self._svc_name})
+                    self.log.warning("evt=tls.reload.fail", svc=self._svc_name, version=ver, err=exc)
 
     # ----------------------------- Shutdown / Signals -----------------------------
 
     def _on_signal(self, sig: signal.Signals) -> None:
-        self.log.info("evt=signal", sig=sig.name)
+        self.log.info("evt=signal", svc=self._svc_name, sig=sig.name, phase=self._status.value)
 
     async def _before_stop(self) -> None:
         self._set_status(ServiceStatus.STOPPING, "shutdown")
         if self._child and self._child.poll() is None:
-            self.log.info("evt=child.terminate")
+            self.log.info("evt=child.terminate", svc=self._svc_name)
             try:
                 self._child.terminate()
                 loop = asyncio.get_event_loop()
                 await loop.run_in_executor(None, self._child.wait, 10)
             except Exception:
-                self.log.warning("evt=child.kill")
+                self.log.warning("evt=child.kill", svc=self._svc_name)
                 try:
                     self._child.kill()
                 except Exception:
@@ -352,9 +371,9 @@ class ContextMicroservice:
         try:
             # config/global/config_hash
             if not kv.config.set_config_hash(CONFIG_HASH):
-                self.log.warning("evt=kv.config_hash.write.false")
+                self.log.warning("evt=kv.config_hash.write.false", svc=self._svc_name)
             # config/global/domain_root (подтверждение домена)
             if not kv.config.set_domain_root(SETTINGS.domain.root):
-                self.log.warning("evt=kv.domain_root.write.false")
+                self.log.warning("evt=kv.domain_root.write.false", svc=self._svc_name)
         except Exception as exc:  # noqa: BLE001
-            self.log.warning("evt=kv.publish_config.fail", err=exc)
+            self.log.warning("evt=kv.publish_config.fail", svc=self._svc_name, err=exc)

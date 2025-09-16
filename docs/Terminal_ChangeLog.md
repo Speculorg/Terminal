@@ -4,6 +4,11 @@
 ---
 
 
+## [2025.09.17]: Унификация логирования и метрик в каркасе ContextMicroservice
+- `source/core/utils/fs.py` - Содержит функцию read_first_line для безопасного чтения первой строки файла и обрезки пробелов. Возвращает None при любой ошибке. Пригодится в entrypoint-ах сервисов для чтения токенов/путей без дублирования кода.
+- `source/core/base/service.py` - добавлены унификация логов + базовые метрики.
+
+
 ## [2025.09.17]: TLS Hot-Reload интерфейс
 - `source/core/runtime/tls_reload.py` - TLSReloader, новый интерфейс "горячей" перезагрузки TLS-материалов.
 - `source/core/runtime/tls/sslcontext_reloader.py` - TLSReloader, который перечитывает PEM и вызывает переданный "применитель" (setter) нового SSLContext;
