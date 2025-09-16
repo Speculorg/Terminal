@@ -5,14 +5,12 @@
 
 
 ## [2025.09.15]: Внедрение KV
-- `core/kv`: добавлен агрегат `KV`, адаптер `ConsulKVClient`, фасады marker/status/cert/config.
-- `core/base/service.py`: публикация `CONFIG_HASH` и `DOMAIN_ROOT` на старте; отражение фаз/heartbeat в KV.
-- `services/consul/app/main.py`: ужаты ACL-политики; маркеры `marker/consul/*`.
-- `services/vault/app/main.py`: выпуск fullchain-сертификатов; публикация `certs/*`, `certs/version`, `marker/vault/*`.
-- `services/traefik/app/main.py`: watcher `certs/version` → `SIGHUP`.
-- `core/settings/settings.py`: типобезопасные поля + флаги Consul TLS; плоские свойства совместимости.
-- Зарезервировано архитектурное место под автоматическую ротацию сертификатов (Consul + Vault), но сама ротация остаётся задачей в плане.
-- Добавлен технический документ `docs\Terminal_Idempotency_SoT.md` 
+- `core/kv`: добавлен агрегат `KV`, адаптер `ConsulKVClient`, фасады `marker`/`status`/`cert`/`config`.
+- `core/base/service.py`: публикация `CONFIG_HASH` и `DOMAIN_ROOT` на старте в `config`; фиксация статусов/heartbeat в `status`.
+- `services/consul/app/main.py`: публикация `marker/consul/*`; ужаты ACL-политики.
+- `services/vault/app/main.py`: чтение/ожидание `marker/consul/mtls_ready`; публикация `certs/*`, `certs/version`, `marker/vault/*`; выпуск fullchain-сертификатов.
+- `services/traefik/app/main.py`: чтение/ожидание `marker/vault/pki_leaf_ready`; watcher `certs/version` → `SIGHUP`.
+- `core/settings/settings.py`: типобезопасные поля + флаги Consul TLS; временно оставлены плоские свойства для совместимости.
 
 
 ## [2025.09.04]: Реорганизована конфигурация

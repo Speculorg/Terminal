@@ -6,41 +6,44 @@
 
 ## Цели
 
-1. Обеспечить детерминированный запуск сервисов без ручного вмешательства.
-2. Исключить повторное выполнение уже завершённых шагов инициализации.
-3. Обеспечить единый источник истины (State of Truth, SoT) для состояния системы.
+1. Обеспечить единый источник истины (State of Truth, SoT) для состояния системы.
+2. Обеспечить детерминированный запуск сервисов без ручного вмешательства.
+3. Исключить повторное выполнение уже завершённых шагов инициализации.
 
 
 ## Общие принципы
 
+- *KV* это хранилище пар `Key:Value`, используется как единый источник истины - *SoT* (Source of Truth), где SoT - это *роль*, а KV - *механизм*.
+- В KV храним все несекретные, разделяемые и идемпотентные состояния в виде именованных ключей и их значений.
 - Все сервисы работают с KV только через объект `KV` (никаких прямых HTTP-запросов).
 - CAS (check-and-set) и backoff-retry защищают от гонок при записи.
-- Префиксы ключей унифицированы:  
-  - `marker/*` - маркеры (вехи, идемпотентные факты).  
-  - `status/*` - статусы сервисов (живые фазы/heartbeat).  
-  - `certs/*` - публичные сертификаты и версия.  
-  - `config/*` - несекретные конфигурации.  
 - Секреты (токены, пароли, приватные ключи) не хранятся в KV.
 
 
 ## Структура KV
 
+Префиксы ключей унифицированы:  
 ```
+# идемпотентные маркеры (вехи, факты)
 marker/consul/initialized
 marker/consul/mtls_ready
-
 marker/vault/initialized
 marker/vault/pki_root_ready
 marker/vault/pki_int_ready
 marker/vault/pki_leaf_ready
-marker/vault/certs_status        # JSON {version, updated_at, meta}
-
+marker/vault/certs_status
 marker/traefik/initialized
 
-status/<svc>                     # JSON ServiceStatus + heartbeat
+# статусы и heartbeat
+status/<svc>/status
+status/<svc>/heartbeat
+
+# публичные сертификаты и версия
 certs/ca.crt
 certs/<svc>.crt
 certs/version
+
+# несекретные конфигурации
 config/global/domain_root
 config/global/config_hash
 config/<svc>/<option>
