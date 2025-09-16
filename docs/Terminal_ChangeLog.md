@@ -4,6 +4,13 @@
 ---
 
 
+## [2025.09.17]: Завершение KV-агрегата
+- `source/core/kv/markers.py` - реализовали желаемый интерфейс вида KV.marker.consul.initialized и сохранили существующие generic-методы.
+- `source/core/kv/configs.py` - глобальные ключи и ключи per-service формируются строго через paths.py (единый нейминг).
+- `source/core/kv/certs.py` - ключи certs/* и marker/vault/certs_status формируются строго через paths.py. publish_bundle() синхронно обновляет и JSON-маркер, и "простую" версию (строка), которую уже читает наш TLS-watcher в каркасе сервиса.
+- `source/core/base/service.py` - ...
+
+
 ## [2025.09.17]: Унификация логирования и метрик в каркасе ContextMicroservice
 - `source/core/utils/fs.py` - Содержит функцию read_first_line для безопасного чтения первой строки файла и обрезки пробелов. Возвращает None при любой ошибке. Пригодится в entrypoint-ах сервисов для чтения токенов/путей без дублирования кода.
 - `source/core/base/service.py` - добавлены унификация логов + базовые метрики.
@@ -12,7 +19,7 @@
 ## [2025.09.17]: TLS Hot-Reload интерфейс
 - `source/core/runtime/tls_reload.py` - TLSReloader, новый интерфейс "горячей" перезагрузки TLS-материалов.
 - `source/core/runtime/tls/sslcontext_reloader.py` - TLSReloader, который перечитывает PEM и вызывает переданный "применитель" (setter) нового SSLContext;
-- `source/core/runtime/tls/signal_reloader.py` - signal_reloader.py — TLSReloader, который шлёт сигнал процессу (по PID или PID-файлу).
+- `source/core/runtime/tls/signal_reloader.py` - signal_reloader.py - TLSReloader, который шлёт сигнал процессу (по PID или PID-файлу).
 - `source/core/runtime/tls/utils.py` - новый набор для безопасной загрузки PEM и сборки ssl.SSLContext (client/server, с/без mTLS).
 - `source/core/base/service.py` - добавлены зависимость tls_reloader, фоновый вотчер версии, вызов hot-reload.
 
