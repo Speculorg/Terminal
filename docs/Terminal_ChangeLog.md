@@ -5,7 +5,10 @@
 
 
 ## [2025.09.17]: TLS Hot-Reload интерфейс
-- `source/core/runtime/tls_reload.py` - новый интерфейс "горячей" перезагрузки TLS-материалов.
+- `source/core/runtime/tls_reload.py` - TLSReloader, новый интерфейс "горячей" перезагрузки TLS-материалов.
+- `source/core/runtime/tls/sslcontext_reloader.py` - TLSReloader, который перечитывает PEM и вызывает переданный "применитель" (setter) нового SSLContext;
+- `source/core/runtime/tls/signal_reloader.py` - signal_reloader.py — TLSReloader, который шлёт сигнал процессу (по PID или PID-файлу).
+- `source/core/runtime/tls/utils.py` - новый набор для безопасной загрузки PEM и сборки ssl.SSLContext (client/server, с/без mTLS).
 - `source/core/base/service.py` - добавлены зависимость tls_reloader, фоновый вотчер версии, вызов hot-reload.
 
 

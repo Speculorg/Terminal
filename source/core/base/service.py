@@ -18,7 +18,7 @@ from core.settings.settings import SETTINGS, CONFIG_HASH
 from core.runtime.status import ServiceStatus, HealthSnapshot
 from core.runtime.health_io import write_health
 from core.runtime.lifecycle import install_signal_shutdown_flag, Periodic
-from core.runtime.tls_reload import TLSReloader
+from core.runtime.tls.tls_reload import TLSReloader
 from core.logging import get_logger
 from core.metrics.registry import registry as metrics_registry
 from core.metrics.registry import Counter, Gauge, Registry
