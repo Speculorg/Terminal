@@ -3,6 +3,11 @@
 
 ---
 
+## [2025.09.16]: Перенос observability в metrics
+- `core/observability/metrics.py` - удалён
+- `core/metrics/registry.py` - перенесли логику из metrics.py
+- `core/metrics/__init.py__` - новый
+- `source\core\base\service.py` - перенастроили импорт
 
 ## [2025.09.15]: Внедрение KV
 - `core/kv`: добавлен агрегат `KV`, адаптер `ConsulKVClient`, фасады `marker`/`status`/`cert`/`config`.

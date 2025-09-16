@@ -1,4 +1,5 @@
 # source/core/base/service.py
+
 """
 Speculorg.Terminal.Core.Base.ContextMicroservice
 - Контракт жизненного цикла микросервиса.
@@ -18,8 +19,8 @@ from core.runtime.status import ServiceStatus, HealthSnapshot
 from core.runtime.health_io import write_health
 from core.runtime.lifecycle import install_signal_shutdown_flag, Periodic
 from core.logging import get_logger
-from core.observability.metrics import registry as metrics_registry
-from core.observability.metrics import Counter, Gauge, Registry
+from core.metrics.registry import registry as metrics_registry
+from core.metrics.registry import Counter, Gauge, Registry
 from core.infra.registrars.base import Registrar
 from core.infra.registrars.consul import ConsulRegistrar
 from core.net.url import build_url, fqdn
@@ -59,7 +60,7 @@ class ContextMicroservice:
     def __init__(self, deps: Optional[ContextMicroserviceDeps] = None) -> None:
         self.deps = deps or ContextMicroserviceDeps()
 
-        # Паспорт сервиса — из SETTINGS.context
+        # Паспорт сервиса - из SETTINGS.context
         self._svc_name: str = SETTINGS.context.name
         self._svc_port: int = SETTINGS.context.port
         self._svc_tags: list[str] = list(SETTINGS.context.tags)
@@ -215,7 +216,7 @@ class ContextMicroservice:
         except Exception as exc:  # noqa: BLE001
             self.log.warning("evt=health.write.fail", err=exc)
 
-        # Параллельно — heartbeat в KV
+        # Параллельно - heartbeat в KV
         kv = getattr(self.deps, "kv", None)
         if kv is not None:
             try:
@@ -230,7 +231,7 @@ class ContextMicroservice:
         self._g_tls_active.set(1.0 if self._tls_active else 0.0, labels={"svc": self._svc_name})
         self.log.info("evt=tls.state", active=1 if active else 0)
 
-        # Ради полноты — быстрый heartbeat в KV при смене TLS
+        # Ради полноты - быстрый heartbeat в KV при смене TLS
         kv = getattr(self.deps, "kv", None)
         if kv is not None:
             try:

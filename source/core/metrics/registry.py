@@ -1,5 +1,4 @@
-# source\core\observability\metrics.py
-
+# source/core/metrics/registry.py
 
 """
 Minimal in-process metrics with Prometheus text exposition format.
