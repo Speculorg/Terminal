@@ -4,6 +4,13 @@
 ---
 
 
+## [2025.09.17]: Watch certs/version → hot-reload & client-TLS refresh для всех трёх сервисов
+- `source/core/runtime/tls/version_watch.py` - выносим слежение за certs/version в отдельный переиспользуемый CertsVersionWatcher.
+- `source/services/consul/app/main.py` - добавлен единый watcher.
+- `source/services/vault/app/main.py` - добавлен единый watcher.
+- `source/services/traefik/app/main.py` - добавлен единый watcher, старая локальная watch-логика удалена.
+
+
 ## [2025.09.17]: Клиентский TLS-релоадер
 - `source/core/runtime/tls/client_reloader.py` - переиспользуемый клиентский TLS-релоадер, который автоматически подхватывает новые ключи/цепочки по событию certs/version (без рестартов)
 - `source/core/runtime/tls/combined_reloader.py` - мультиплексор для нескольких реализаций TLSReloader

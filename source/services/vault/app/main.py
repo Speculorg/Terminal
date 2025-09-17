@@ -9,20 +9,19 @@ import time
 import http.client
 import hashlib
 from pathlib import Path
-from typing import Final, Dict
+from typing import Final, Dict, Optional
 
 from core.base.service import ContextMicroservice
-from core.runtime.status import ServiceStatus
 from core.settings.settings import SETTINGS
-from core.net.port import wait_port
 from core.logging import get_logger
+from core.net.port import wait_port
+from core.net.http.client import probe_https
 from core.kv import KV, build_consul_kv_from_settings
-
-# mTLS reloader + probe
+from core.kv import paths as kvpaths
+from core.runtime.status import ServiceStatus
 from core.runtime.tls.client_reloader import ClientTLSReloader
 from core.runtime.tls.combined_reloader import CombinedTLSReloader
-from core.runtime.tls.signal_reloader import SignalTLSReloader
-from core.net.http.client import probe_https
+from core.runtime.tls.version_watch import CertsVersionWatcher
 
 
 log = get_logger("vault.app")
@@ -124,6 +123,11 @@ def _health_ok(https: bool, timeout: float) -> bool:
 
 # ----------------------------- Service -----------------------------
 class VaultService(ContextMicroservice):
+    def __init__(self) -> None:
+        super().__init__()
+        self._client_sslctx = None
+        self._tls_watch_task: Optional[asyncio.Task] = None
+
     async def initialize(self) -> None:
         first_run = not (CRT_VLT.exists() and CA_PEM.exists())
 
@@ -142,19 +146,23 @@ class VaultService(ContextMicroservice):
             return
         self.svc_set_tls_active(True)
 
-        # Подключим комбинированный TLS-релоадер: SIGHUP vault-процессу на поддерживаемых версиях + клиентский SSLContext
+        # Комбинированный TLS-релоадер: только клиентский контекст (Vault server не принимает SIGHUP для PKI)
         try:
-            # У server-части Vault нет стандартного SIGHUP-reload PKI, но Combined допускает пустой список
             cli = ClientTLSReloader(ca_file=CA_PEM, cert_file=CRT_VLT, key_file=KEY_VLT)
             self.deps.tls_reloader = CombinedTLSReloader([cli])
             self._client_sslctx = cli.ssl_context
         except Exception:
-            self._client_sslctx = None  # type: ignore[attr-defined]
+            self._client_sslctx = None  # type: ignore[assignment]
 
-        # 3) Publish certs/version to KV
+        # 3) Publish certs/version to KV (и подключим KV в deps)
         await self._publish_certs_to_kv()
 
-        # 4) mTLS-smoke: доступ к Consul по внутреннему 443
+        # 4) Watch certs/version → client TLS refresh
+        if getattr(self.deps, "kv", None) and getattr(self.deps, "tls_reloader", None):
+            watcher = CertsVersionWatcher(self.deps.kv, self.deps.tls_reloader, kvpaths.CERTS_VERSION, 2.0, self.log)
+            self._tls_watch_task = asyncio.create_task(watcher.run(self._shutdown))
+
+        # 5) mTLS-smoke: доступ к Consul по внутреннему 443
         await self._mtls_smoke_best_effort()
 
     async def start(self) -> None:
@@ -162,7 +170,16 @@ class VaultService(ContextMicroservice):
         while not getattr(self, "_shutdown").is_set():
             await asyncio.sleep(5)
 
-    # -- helpers --
+    async def stop(self) -> None:
+        if self._tls_watch_task and not self._tls_watch_task.done():
+            self._tls_watch_task.cancel()
+            try:
+                await self._tls_watch_task
+            except Exception:
+                pass
+        await super().stop()
+
+    # -- helpers (инициализация/политики/PKI: оставьте ваши текущие реализации) --
     async def _start_vault(self, *, cfg: str, https: bool) -> bool:
         cmd = ["vault", "server", f"-config={cfg}"]
         self.log.info("evt=proc.start app=vault mode=%s cmd=%s", "https" if https else "http", " ".join(cmd))
@@ -196,9 +213,7 @@ class VaultService(ContextMicroservice):
                 except Exception:
                     pass
 
-    # -- init/unseal/kv/policies/pki (HTTP) --
     async def _ensure_init_unseal_http(self) -> None:
-        # already initialised?
         resp = _api("GET", "/v1/sys/health", https=False)
         data = json.loads(resp.read().decode("utf-8") or "{}")
         if not ROOT_TOKEN_JSON.exists():
@@ -217,7 +232,6 @@ class VaultService(ContextMicroservice):
         root_token = keys.get("root_token", "")
         unseal_key = (keys.get("keys") or [""])[0]
 
-        # unseal if sealed
         health = _api("GET", "/v1/sys/health", https=False)
         hjson = json.loads(health.read().decode("utf-8") or "{}")
         if hjson.get("sealed", True):
@@ -227,7 +241,6 @@ class VaultService(ContextMicroservice):
                 self.log.error("evt=vault.unseal.fail code=%s", res.status); return
             self.log.info("evt=vault.unseal.ok")
 
-        # enable approle auth if not enabled
         auths = _api("GET", "/v1/sys/auth", token=root_token, https=False)
         amap = json.loads(auths.read().decode("utf-8") or "{}")
         if "approle/" not in amap:
@@ -238,7 +251,6 @@ class VaultService(ContextMicroservice):
         keys = json.loads(ROOT_TOKEN_JSON.read_text(encoding="utf-8"))
         root_token = keys.get("root_token", "")
 
-        # KV v2 at secret/
         mounts = _api("GET", "/v1/sys/mounts", token=root_token, https=False)
         mjson = json.loads(mounts.read().decode("utf-8") or "{}")
         if "secret/" not in mjson:
@@ -246,12 +258,10 @@ class VaultService(ContextMicroservice):
                  body={"type": "kv", "options": {"version": "2"}}).read()
             self.log.info("evt=vault.mount.kv path=secret/")
 
-        # secrets (seed)
         for path, data in SECRETS_KV.items():
             _api("POST", f"/v1/secret/data/{path}", token=root_token, https=False, body={"data": data}).read()
             self.log.info("evt=vault.secret.upsert path=%s", path)
 
-        # policies
         resp = _api("GET", "/v1/sys/policies/acl", token=root_token, https=False)
         existing = set(json.loads(resp.read().decode("utf-8") or "{}").keys())
         for name, rules in POLICIES.items():
@@ -262,7 +272,6 @@ class VaultService(ContextMicroservice):
                  body={"policy": rules, "type": "service"}).read()
             self.log.info("evt=vault.policy.create name=%s", name)
 
-        # approles
         for role, cfg in APPROLES.items():
             chk = _api("GET", f"/v1/auth/approle/role/{role}", token=root_token, https=False)
             if 200 <= chk.status < 300:
@@ -275,7 +284,6 @@ class VaultService(ContextMicroservice):
         keys = json.loads(ROOT_TOKEN_JSON.read_text(encoding="utf-8"))
         root_token = keys.get("root_token", "")
 
-        # Проверяем/монтируем PKI root и int по путям из SETTINGS
         mounts = _api("GET", "/v1/sys/mounts", token=root_token, https=False)
         mjson = json.loads(mounts.read().decode("utf-8") or "{}")
 
@@ -287,7 +295,6 @@ class VaultService(ContextMicroservice):
             _api("POST", f"/v1/sys/mounts/{PKI_INT_PATH}", token=root_token, https=False, body={"type": "pki"}).read()
             self.log.info("evt=vault.mount.pki path=%s/", PKI_INT_PATH)
 
-        # root CA
         if not CA_PEM.exists():
             self.log.info("evt=vault.pki.root.generate cn=%s", DOMAIN_ROOT)
             res = _api("POST", f"/v1/{PKI_ROOT_PATH}/root/generate/internal", token=root_token, https=False,
@@ -303,7 +310,6 @@ class VaultService(ContextMicroservice):
                 "crl_distribution_points": f"http://{SETTINGS.vault.host}:{SETTINGS.vault.http_port}/v1/{PKI_ROOT_PATH}/crl",
             }).read()
 
-            # Создаём промежуточный CA и подписываем его рутом
             csr_res = _api("POST", f"/v1/{PKI_INT_PATH}/intermediate/generate/internal",
                            token=root_token, https=False, body={"common_name": f"intermediate.{DOMAIN_ROOT}"})
             if not (200 <= csr_res.status < 300):
@@ -320,7 +326,6 @@ class VaultService(ContextMicroservice):
                  token=root_token, https=False, body={"certificate": cert}).read()
             self.log.info("evt=vault.pki.int.ready")
 
-        # роль для выдачи leaf в intermediate PKI
         _api("POST", f"/v1/{PKI_INT_PATH}/roles/{PKI_ROLE}", token=root_token, https=False, body={
             "allowed_domains": f"{DOMAIN_ROOT},consul,vault,traefik,localhost",
             "allow_subdomains": True,
@@ -329,7 +334,6 @@ class VaultService(ContextMicroservice):
             "max_ttl": PKI_ROLE_MAX_TTL,
         }).read()
 
-        # leafs (FULLCHAIN = leaf + issuing_ca/ca_chain)
         for name, params in LEAF_SVCS.items():
             crt, key = CERTS_DIR / f"{name}.crt", CERTS_DIR / f"{name}.key"
             if crt.exists() and key.exists():
@@ -359,14 +363,12 @@ class VaultService(ContextMicroservice):
             key.write_text(data.get("private_key", ""), encoding="utf-8");  key.chmod(0o600)
             self.log.info("evt=vault.pki.leaf.saved name=%s crt=%s key=%s", name, crt, key)
 
-
     # ----------------------------- Publish certs to KV -----------------------------
     async def _publish_certs_to_kv(self) -> None:
         token = None
         try:
-            p = Path("/consul/secrets/vault_consul_token")
-            if p.exists():
-                token = p.read_text(encoding="utf-8").strip() or None
+            if VAULT_CONSUL_TOKEN_FILE.exists():
+                token = VAULT_CONSUL_TOKEN_FILE.read_text(encoding="utf-8").strip() or None
         except Exception as exc:  # noqa: BLE001
             self.log.warning("evt=vault.kv.token.read.fail err=%s", exc)
 
@@ -384,19 +386,15 @@ class VaultService(ContextMicroservice):
             return
 
         try:
-            # markers
             kv.marker.vault.initialized.ensure()
             kv.marker.vault.pki_root_ready.ensure()
             kv.marker.vault.pki_int_ready.ensure()
 
-            # certs
             svc_pems: Dict[str, str] = {}
-            if (CERTS_DIR / "consul.crt").exists():
-                svc_pems["consul"] = (CERTS_DIR / "consul.crt").read_text(encoding="utf-8")
-            if (CERTS_DIR / "vault.crt").exists():
-                svc_pems["vault"] = (CERTS_DIR / "vault.crt").read_text(encoding="utf-8")
-            if (CERTS_DIR / "traefik.crt").exists():
-                svc_pems["traefik"] = (CERTS_DIR / "traefik.crt").read_text(encoding="utf-8")
+            for svc in ("consul", "vault", "traefik"):
+                p = CERTS_DIR / f"{svc}.crt"
+                if p.exists():
+                    svc_pems[svc] = p.read_text(encoding="utf-8")
 
             if (CERTS_DIR / "ca.crt").exists():
                 kv.cert.publish_ca_pem((CERTS_DIR / "ca.crt").read_text(encoding="utf-8"))
@@ -417,7 +415,7 @@ class VaultService(ContextMicroservice):
     async def _mtls_smoke_best_effort(self) -> None:
         try:
             url = f"https://consul.{SETTINGS.domain.root}/v1/status/leader"
-            ctx = getattr(self, "_client_sslctx", None)
+            ctx = self._client_sslctx
             ok = await asyncio.get_event_loop().run_in_executor(None, probe_https, url, ctx, 2.5)
             self.log.info("evt=mtls.probe target=%s ok=%s", url, 1 if ok else 0)
         except Exception as exc:  # noqa: BLE001

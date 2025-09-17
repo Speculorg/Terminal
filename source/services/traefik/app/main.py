@@ -1,4 +1,4 @@
-# source/services/traefik/app/main.py
+# source\services\traefik\app\main.py
 
 from __future__ import annotations
 import asyncio
@@ -8,22 +8,17 @@ from pathlib import Path
 from typing import Optional
 
 from core.base.service import ContextMicroservice
-from core.runtime.status import ServiceStatus
 from core.settings.settings import SETTINGS
 from core.net.port import wait_port
 from core.infra.tls import probe_tls
 from core.logging import get_logger
-
-# KV / SoT
 from core.kv import KV, build_consul_kv_from_settings
-
-# TLS hot-reload
+from core.kv import paths as kvpaths
+from core.runtime.status import ServiceStatus
 from core.runtime.tls.signal_reloader import SignalTLSReloader
 from core.runtime.tls.client_reloader import ClientTLSReloader
 from core.runtime.tls.combined_reloader import CombinedTLSReloader
-
-# HTTP probe (можно использовать при необходимости)
-from core.net.http.client import probe_https
+from core.runtime.tls.version_watch import CertsVersionWatcher
 
 
 log = get_logger("traefik.app")
@@ -52,9 +47,10 @@ INIT_TIMEOUT = float(SETTINGS.timeouts.init_timeout_s)
 
 
 class TraefikService(ContextMicroservice):
-    def __init__(self, *args, **kwargs) -> None:
-        super().__init__(*args, **kwargs)
+    def __init__(self) -> None:
+        super().__init__()
         self._kv: Optional[KV] = None
+        self._tls_watch_task: Optional[asyncio.Task] = None
 
     async def initialize(self) -> None:
         cmd = os.getenv("TRAEFIK_CMD", "traefik --configFile=/etc/traefik/traefik.yml").split()
@@ -62,7 +58,7 @@ class TraefikService(ContextMicroservice):
         proc = subprocess.Popen(cmd)  # noqa: S603
         self.proc_attach(proc)
 
-        # Комбинированный TLS-релоадер: SIGHUP + клиентский контекст (на будущее)
+        # Комбинированный TLS-релоадер: SIGHUP Traefik + клиентский контекст (на будущее)
         try:
             srv = SignalTLSReloader(pid=self._child.pid if self._child else None)
             cli = ClientTLSReloader(ca_file=CA_PEM, cert_file=CRT, key_file=KEY)
@@ -89,10 +85,24 @@ class TraefikService(ContextMicroservice):
             except Exception as exc:  # noqa: BLE001
                 self.log.warning("evt=traefik.marker.init.fail err=%s", exc)
 
+        # Единый watcher certs/version → hot reload
+        if getattr(self.deps, "kv", None) and getattr(self.deps, "tls_reloader", None):
+            watcher = CertsVersionWatcher(self.deps.kv, self.deps.tls_reloader, kvpaths.CERTS_VERSION, 2.0, self.log)
+            self._tls_watch_task = asyncio.create_task(watcher.run(self._shutdown))
+
     async def start(self) -> None:
         self._set_status(ServiceStatus.RUNNING, "traefik.up")
         while not getattr(self, "_shutdown").is_set():
             await asyncio.sleep(5)
+
+    async def stop(self) -> None:
+        if self._tls_watch_task and not self._tls_watch_task.done():
+            self._tls_watch_task.cancel()
+            try:
+                await self._tls_watch_task
+            except Exception:
+                pass
+        await super().stop()
 
     async def _attach_kv(self) -> None:
         token = None

@@ -22,6 +22,7 @@ from core.kv import paths as kvpaths
 from core.runtime.tls.client_reloader import ClientTLSReloader
 from core.runtime.tls.combined_reloader import CombinedTLSReloader
 from core.runtime.tls.signal_reloader import SignalTLSReloader
+from core.runtime.tls.version_watch import CertsVersionWatcher
 from core.net.http.client import probe_https
 
 
@@ -52,12 +53,6 @@ RETRY_MAX    = float(SETTINGS.timeouts.max_retry_interval_s)
 BACKOFF      = float(SETTINGS.timeouts.backoff_factor)
 
 # ----------------------------- ACL policies (tightened) -----------------------------
-# Минимизируем поверхности доступа. Политики ориентированы на префиксы:
-# - marker/*   - факты (SoT)
-# - status/*   - живые статусы сервисов
-# - certs/*    - публичные сертификаты и версия
-# - config/*   - несекретные конфиги
-# - vault/*    - служебный Consul KV storage для Vault (ОБЯЗАТЕЛЕН!)
 POLICIES: Dict[str, Dict] = {
     "agent": {
         "name": "agent-policy",
@@ -148,6 +143,11 @@ def _leader_ready(https: bool, timeout: float) -> bool:
 
 # ----------------------------- Service -----------------------------
 class ConsulService(ContextMicroservice):
+    def __init__(self) -> None:
+        super().__init__()
+        self._client_sslctx = None
+        self._tls_watch_task: Optional[asyncio.Task] = None
+
     async def initialize(self) -> None:
         first_run = not AGENT_TOKEN_FILE.exists()
 
@@ -168,22 +168,27 @@ class ConsulService(ContextMicroservice):
         if not await self._start_consul(cfg=cfg, https=use_tls):
             return
 
-        # Подключим комбинированный TLS-релоадер: SIGHUP агенту + клиентский SSLContext
+        # Комбинированный TLS-релоадер: SIGHUP агенту + клиентский SSLContext
         try:
             srv = SignalTLSReloader(pid=self._child.pid if self._child else None)
             cli = ClientTLSReloader(ca_file=CA_CERT, cert_file=CONSUL_CERT, key_file=CONSUL_KEY)
             self.deps.tls_reloader = CombinedTLSReloader([srv, cli])
-            self._client_sslctx = cli.ssl_context  # для локальных проб
+            self._client_sslctx = cli.ssl_context  # для mTLS-проб
         except Exception:
-            self._client_sslctx = None  # type: ignore[attr-defined]
+            self._client_sslctx = None  # type: ignore[assignment]
 
-        # 3) set agent token (once agent fully up)
+        # 3) agent token
         await self._apply_agent_token()
 
-        # 4) attach KV and publish markers (idempotent)
+        # 4) attach KV + markers
         await self._late_attach_kv_and_publish_markers(use_tls)
 
-        # 5) mTLS-smoke (best-effort): доступ к Vault по внутреннему 443 с клиентскими сертификатами
+        # 5) Watch certs/version → hot reload
+        if getattr(self.deps, "kv", None) and getattr(self.deps, "tls_reloader", None):
+            watcher = CertsVersionWatcher(self.deps.kv, self.deps.tls_reloader, kvpaths.CERTS_VERSION, 2.0, self.log)
+            self._tls_watch_task = asyncio.create_task(watcher.run(self._shutdown))
+
+        # 6) best-effort mTLS probe (vault)
         await self._mtls_smoke_best_effort()
 
     async def start(self) -> None:
@@ -191,7 +196,17 @@ class ConsulService(ContextMicroservice):
         while not getattr(self, "_shutdown").is_set():
             await asyncio.sleep(5)
 
-    # -- helpers --
+    async def stop(self) -> None:
+        # Остановим watcher аккуратно
+        if self._tls_watch_task and not self._tls_watch_task.done():
+            self._tls_watch_task.cancel()
+            try:
+                await self._tls_watch_task
+            except Exception:
+                pass
+        await super().stop()
+
+    # -- helpers (остальное без изменений) --
     async def _start_consul(self, *, cfg: str, https: bool) -> bool:
         cmd = ["consul", "agent", f"-config-file={cfg}"]
         self.log.info("evt=proc.start app=consul mode=%s cmd=%s", "https" if https else "http", " ".join(cmd))
@@ -249,7 +264,6 @@ class ConsulService(ContextMicroservice):
             root_token = json.loads(body).get("SecretID", "")
             self.log.info("evt=acl.bootstrap.ok token_saved=%s", ROOT_TOKEN_JSON)
 
-        # Upsert policies (всегда PUT с новыми правилами)
         for name, cfg in POLICIES.items():
             _api("PUT", "/v1/acl/policy", token=root_token, https=False, body={
                 "Name": cfg["name"],
@@ -258,7 +272,6 @@ class ConsulService(ContextMicroservice):
             }).read()
             self.log.info("evt=policy.upsert name=%s", cfg["name"])
 
-            # Создаём токен только если не сохранён локально
             token_path = Path(cfg["token_file"])
             if not token_path.exists():
                 t_resp = _api("PUT", "/v1/acl/token", token=root_token, https=False, body={
@@ -309,25 +322,18 @@ class ConsulService(ContextMicroservice):
             if getattr(self, "deps", None) is not None:
                 self.deps.kv = kv
 
-            # 1) initialized
             kv.marker.svc("consul").initialized.ensure()
-            # 2) mTLS готов (если подняли TLS)
             if use_tls:
                 kv.marker.svc("consul").mtls_ready.ensure()
-            # 3) минимальный маркер синхронизации каталога
             kv.marker.consul.catalog_synchronized.ensure()
 
         except Exception as exc:  # noqa: BLE001
             log.warning("evt=kv.attach_or_publish.fail err=%s", exc)
 
     async def _mtls_smoke_best_effort(self) -> None:
-        """
-        Одна мимолётная mTLS-проба: GET https://vault.<domain>/
-        Успех/провал пишем в лог, ничего не фейлим.
-        """
         try:
             url = f"https://vault.{SETTINGS.domain.root}/"
-            ctx = getattr(self, "_client_sslctx", None)
+            ctx = self._client_sslctx
             ok = await asyncio.get_event_loop().run_in_executor(None, probe_https, url, ctx, 2.5)
             self.log.info("evt=mtls.probe target=%s ok=%s", url, 1 if ok else 0)
         except Exception as exc:  # noqa: BLE001
