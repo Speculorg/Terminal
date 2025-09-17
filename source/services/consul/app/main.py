@@ -1,4 +1,4 @@
-# source/services/consul/app/main.py
+# source\services\consul\app\main.py
 
 from __future__ import annotations
 import asyncio
@@ -16,12 +16,14 @@ from core.settings.settings import SETTINGS
 from core.net.port import wait_port
 from core.logging import get_logger
 from core.kv import KV, build_consul_kv_from_settings
+from core.kv import paths as kvpaths
 
 # mTLS reloader + probe
 from core.runtime.tls.client_reloader import ClientTLSReloader
 from core.runtime.tls.combined_reloader import CombinedTLSReloader
 from core.runtime.tls.signal_reloader import SignalTLSReloader
 from core.net.http.client import probe_https
+
 
 log = get_logger("consul.app")
 
@@ -49,14 +51,20 @@ RETRY_BASE   = float(SETTINGS.timeouts.retry_interval_s)
 RETRY_MAX    = float(SETTINGS.timeouts.max_retry_interval_s)
 BACKOFF      = float(SETTINGS.timeouts.backoff_factor)
 
-# ----------------------------- ACL policies -----------------------------
+# ----------------------------- ACL policies (tightened) -----------------------------
+# Минимизируем поверхности доступа. Политики ориентированы на префиксы:
+# - marker/*   - факты (SoT)
+# - status/*   - живые статусы сервисов
+# - certs/*    - публичные сертификаты и версия
+# - config/*   - несекретные конфиги
+# - vault/*    - служебный Consul KV storage для Vault (ОБЯЗАТЕЛЕН!)
 POLICIES: Dict[str, Dict] = {
     "agent": {
         "name": "agent-policy",
         "rules": """
             agent            "" { policy = "write" }
             node_prefix      "" { policy = "write" }
-            service_prefix   "" { policy = "read"  }
+            service_prefix   "" { policy = "write" }
             session_prefix   "" { policy = "write" }
         """,
         "token_file": AGENT_TOKEN_FILE,
@@ -241,6 +249,7 @@ class ConsulService(ContextMicroservice):
             root_token = json.loads(body).get("SecretID", "")
             self.log.info("evt=acl.bootstrap.ok token_saved=%s", ROOT_TOKEN_JSON)
 
+        # Upsert policies (всегда PUT с новыми правилами)
         for name, cfg in POLICIES.items():
             _api("PUT", "/v1/acl/policy", token=root_token, https=False, body={
                 "Name": cfg["name"],
@@ -249,6 +258,7 @@ class ConsulService(ContextMicroservice):
             }).read()
             self.log.info("evt=policy.upsert name=%s", cfg["name"])
 
+            # Создаём токен только если не сохранён локально
             token_path = Path(cfg["token_file"])
             if not token_path.exists():
                 t_resp = _api("PUT", "/v1/acl/token", token=root_token, https=False, body={
@@ -299,9 +309,12 @@ class ConsulService(ContextMicroservice):
             if getattr(self, "deps", None) is not None:
                 self.deps.kv = kv
 
+            # 1) initialized
             kv.marker.svc("consul").initialized.ensure()
+            # 2) mTLS готов (если подняли TLS)
             if use_tls:
                 kv.marker.svc("consul").mtls_ready.ensure()
+            # 3) минимальный маркер синхронизации каталога
             kv.marker.consul.catalog_synchronized.ensure()
 
         except Exception as exc:  # noqa: BLE001
