@@ -1,4 +1,4 @@
-# source/services/vault/app/main.py
+# source\services\vault\app\main.py
 
 from __future__ import annotations
 import asyncio
@@ -18,6 +18,13 @@ from core.net.port import wait_port
 from core.logging import get_logger
 from core.kv import KV, build_consul_kv_from_settings
 
+# mTLS reloader + probe
+from core.runtime.tls.client_reloader import ClientTLSReloader
+from core.runtime.tls.combined_reloader import CombinedTLSReloader
+from core.runtime.tls.signal_reloader import SignalTLSReloader
+from core.net.http.client import probe_https
+
+
 log = get_logger("vault.app")
 
 
@@ -35,33 +42,28 @@ CA_PEM  = CERTS_DIR / "ca.crt"
 CRT_VLT = CERTS_DIR / "vault.crt"
 KEY_VLT = CERTS_DIR / "vault.key"
 
-# Consul tokens issued by Consul service (must be mounted read-only here)
 CONSUL_TOKENS_DIR: Final[Path] = Path("/consul/secrets")
 VAULT_CONSUL_TOKEN_FILE: Final[Path] = CONSUL_TOKENS_DIR / "vault_consul_token"
 
-# Тайминги из SETTINGS
 INIT_TIMEOUT = float(SETTINGS.timeouts.init_timeout_s)
 RETRY_BASE   = float(SETTINGS.timeouts.retry_interval_s)
 RETRY_MAX    = float(SETTINGS.timeouts.max_retry_interval_s)
 BACKOFF      = float(SETTINGS.timeouts.backoff_factor)
 
-# PKI / domain (из SETTINGS)
 DOMAIN_ROOT: Final[str] = SETTINGS.domain.root
-PKI_ROOT_PATH: Final[str] = SETTINGS.vault.pki_root_path   # например: "pki"
-PKI_INT_PATH:  Final[str] = SETTINGS.vault.pki_int_path    # например: "pki-int"
-PKI_ROLE:      Final[str] = SETTINGS.vault.pki_role        # например: "terminal-leaf"
+PKI_ROOT_PATH: Final[str] = SETTINGS.vault.pki_root_path
+PKI_INT_PATH:  Final[str] = SETTINGS.vault.pki_int_path
+PKI_ROLE:      Final[str] = SETTINGS.vault.pki_role
 
 PKI_ROOT_TTL:     Final[str] = "87600h"
 PKI_ROLE_MAX_TTL: Final[str] = "720h"
 
-# Лифы — минимальный набор
 LEAF_SVCS: Final[dict[str, dict[str, str]]] = {
     "consul":  {"common_name": f"consul.{DOMAIN_ROOT}",  "alt_names": "server.dc-1.consul,consul,localhost"},
     "vault":   {"common_name": f"vault.{DOMAIN_ROOT}",   "alt_names": "vault,localhost"},
     "traefik": {"common_name": f"traefik.{DOMAIN_ROOT}", "alt_names": "traefik,localhost"},
 }
 
-# Начальные KV/политики/approle (seed)
 SECRETS_KV: Final[dict[str, dict[str, str]]] = {
     "database": {"user": "speculorg", "pass": "speculpwd"},
     "rabbitmq": {"user": "guest",     "pass": "guest"},
@@ -107,13 +109,11 @@ def _api(
 
 
 def _health_ok(https: bool, timeout: float) -> bool:
-    """Ожидание валидного статуса здоровья экспоненциальным backoff."""
     deadline = time.time() + max(1.0, timeout)
     delay = max(0.2, RETRY_BASE)
     while time.time() < deadline:
         try:
             resp = _api("GET", "/v1/sys/health", https=https)
-            # 200/429/501/503 — допустимые стадии Vault
             if resp.status in (200, 429, 501, 503):
                 return True
         except Exception:
@@ -127,7 +127,7 @@ class VaultService(ContextMicroservice):
     async def initialize(self) -> None:
         first_run = not (CRT_VLT.exists() and CA_PEM.exists())
 
-        # 1) first boot (HTTP): init/unseal + PKI/KV/Policies/AppRoles -> issue leaf certs
+        # 1) first boot (HTTP)
         if first_run:
             if not await self._start_vault(cfg=CFG_HTTP, https=False):
                 return
@@ -142,8 +142,20 @@ class VaultService(ContextMicroservice):
             return
         self.svc_set_tls_active(True)
 
-        # 3) Публикация публичных сертификатов и версии в Consul KV (после HTTPS старта)
+        # Подключим комбинированный TLS-релоадер: SIGHUP vault-процессу на поддерживаемых версиях + клиентский SSLContext
+        try:
+            # У server-части Vault нет стандартного SIGHUP-reload PKI, но Combined допускает пустой список
+            cli = ClientTLSReloader(ca_file=CA_PEM, cert_file=CRT_VLT, key_file=KEY_VLT)
+            self.deps.tls_reloader = CombinedTLSReloader([cli])
+            self._client_sslctx = cli.ssl_context
+        except Exception:
+            self._client_sslctx = None  # type: ignore[attr-defined]
+
+        # 3) Publish certs/version to KV
         await self._publish_certs_to_kv()
+
+        # 4) mTLS-smoke: доступ к Consul по внутреннему 443
+        await self._mtls_smoke_best_effort()
 
     async def start(self) -> None:
         self._set_status(ServiceStatus.RUNNING, "vault.up")
@@ -347,17 +359,14 @@ class VaultService(ContextMicroservice):
             key.write_text(data.get("private_key", ""), encoding="utf-8");  key.chmod(0o600)
             self.log.info("evt=vault.pki.leaf.saved name=%s crt=%s key=%s", name, crt, key)
 
-    # ----------------------------- Publish certs to KV -----------------------------
 
+    # ----------------------------- Publish certs to KV -----------------------------
     async def _publish_certs_to_kv(self) -> None:
-        """
-        Публикует публичные PEM в Consul KV + маркеры готовности PKI/сертификатов.
-        Использует Consul-токен для Vault из /consul/secrets/vault_consul_token.
-        """
         token = None
         try:
-            if VAULT_CONSUL_TOKEN_FILE.exists():
-                token = VAULT_CONSUL_TOKEN_FILE.read_text(encoding="utf-8").strip() or None
+            p = Path("/consul/secrets/vault_consul_token")
+            if p.exists():
+                token = p.read_text(encoding="utf-8").strip() or None
         except Exception as exc:  # noqa: BLE001
             self.log.warning("evt=vault.kv.token.read.fail err=%s", exc)
 
@@ -374,42 +383,45 @@ class VaultService(ContextMicroservice):
             self.log.warning("evt=vault.kv.attach.fail err=%s", exc)
             return
 
-        # Маркеры готовности PKI
         try:
+            # markers
             kv.marker.vault.initialized.ensure()
             kv.marker.vault.pki_root_ready.ensure()
             kv.marker.vault.pki_int_ready.ensure()
-        except Exception as exc:  # noqa: BLE001
-            self.log.warning("evt=vault.kv.marker.pki.fail err=%s", exc)
 
-        # Публикация PEM и версии
-        try:
-            if CA_PEM.exists():
-                kv.cert.publish_ca_pem(CA_PEM.read_text(encoding="utf-8"))
-
+            # certs
             svc_pems: Dict[str, str] = {}
-            for svc in ("consul", "vault", "traefik"):
-                p = CERTS_DIR / f"{svc}.crt"
-                if p.exists():
-                    svc_pems[svc] = p.read_text(encoding="utf-8")
+            if (CERTS_DIR / "consul.crt").exists():
+                svc_pems["consul"] = (CERTS_DIR / "consul.crt").read_text(encoding="utf-8")
+            if (CERTS_DIR / "vault.crt").exists():
+                svc_pems["vault"] = (CERTS_DIR / "vault.crt").read_text(encoding="utf-8")
+            if (CERTS_DIR / "traefik.crt").exists():
+                svc_pems["traefik"] = (CERTS_DIR / "traefik.crt").read_text(encoding="utf-8")
+
+            if (CERTS_DIR / "ca.crt").exists():
+                kv.cert.publish_ca_pem((CERTS_DIR / "ca.crt").read_text(encoding="utf-8"))
 
             if svc_pems:
-                # Версию считаем как sha256 всех PEM (детерминированно по имени сервиса)
-                hasher = hashlib.sha256()
-                for svc in sorted(svc_pems):
-                    hasher.update(svc.encode("utf-8")); hasher.update(b"\0")
-                    hasher.update(svc_pems[svc].encode("utf-8")); hasher.update(b"\0")
-                version = hasher.hexdigest()
-
-                if kv.cert.publish_bundle(svc_pems, version=version):
+                h = hashlib.sha256()
+                for name in sorted(svc_pems):
+                    h.update(name.encode()); h.update(b"\0"); h.update(svc_pems[name].encode()); h.update(b"\0")
+                ver = h.hexdigest()
+                if kv.cert.publish_bundle(svc_pems, version=ver):
                     kv.marker.vault.pki_leaf_ready.ensure()
-                    self.log.info("evt=vault.kv.certs.published version=%s svcs=%s", version, ",".join(sorted(svc_pems)))
+                    self.log.info("evt=vault.kv.certs.published version=%s", ver)
                 else:
                     self.log.warning("evt=vault.kv.certs.publish.false")
-            else:
-                self.log.warning("evt=vault.kv.certs.skip reason=no.svc_pems")
         except Exception as exc:  # noqa: BLE001
             self.log.warning("evt=vault.kv.certs.publish.fail err=%s", exc)
+
+    async def _mtls_smoke_best_effort(self) -> None:
+        try:
+            url = f"https://consul.{SETTINGS.domain.root}/v1/status/leader"
+            ctx = getattr(self, "_client_sslctx", None)
+            ok = await asyncio.get_event_loop().run_in_executor(None, probe_https, url, ctx, 2.5)
+            self.log.info("evt=mtls.probe target=%s ok=%s", url, 1 if ok else 0)
+        except Exception as exc:  # noqa: BLE001
+            self.log.warning("evt=mtls.probe.fail err=%s", exc)
 
 
 async def main() -> None:

@@ -4,6 +4,15 @@
 ---
 
 
+## [2025.09.17]: Клиентский TLS-релоадер
+- `source/core/runtime/tls/client_reloader.py` - переиспользуемый клиентский TLS-релоадер, который автоматически подхватывает новые ключи/цепочки по событию certs/version (без рестартов)
+- `source/core/runtime/tls/combined_reloader.py` - мультиплексор для нескольких реализаций TLSReloader
+- `source/core/net/http/client.py` - синхронная GET-проба к HTTPS-ресурсу с клиентским TLS.
+- `source/services/consul/app/main.py` - mTLS-проба + комбинированный релоадер
+- `source/services/vault/app/main.py` - mTLS-проба + комбинированный релоадер
+- `source/services/traefik/app/main.py` - mTLS-проба + комбинированный релоадер
+
+
 ## [2025.09.17]: Завершение KV-агрегата
 - `source/core/kv/markers.py` - реализовали желаемый интерфейс вида KV.marker.consul.initialized и сохранили существующие generic-методы.
 - `source/core/kv/configs.py` - глобальные ключи и ключи per-service формируются строго через paths.py (единый нейминг).

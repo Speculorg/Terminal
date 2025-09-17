@@ -17,6 +17,12 @@ from core.net.port import wait_port
 from core.logging import get_logger
 from core.kv import KV, build_consul_kv_from_settings
 
+# mTLS reloader + probe
+from core.runtime.tls.client_reloader import ClientTLSReloader
+from core.runtime.tls.combined_reloader import CombinedTLSReloader
+from core.runtime.tls.signal_reloader import SignalTLSReloader
+from core.net.http.client import probe_https
+
 log = get_logger("consul.app")
 
 
@@ -59,19 +65,15 @@ POLICIES: Dict[str, Dict] = {
     "vault": {
         "name": "vault-policy",
         "rules": """
-            # Vault Consul storage (обязательно)
             key_prefix "vault/"                   { policy = "write" }
             session_prefix ""                     { policy = "write" }
 
-            # Vault публикует сертификаты и статус ротации
             key_prefix "certs/"                   { policy = "write" }
             key_prefix "marker/vault/"            { policy = "write" }
 
-            # Vault читает глобальные конфиги/статусы
             key_prefix "config/global/"           { policy = "read"  }
             key_prefix "status/"                  { policy = "read"  }
 
-            # Минимально необходимое для сервис-дискавери
             service "vault"                       { policy = "write" }
             node_prefix ""                        { policy = "read"  }
             query_prefix ""                       { policy = "read"  }
@@ -82,12 +84,10 @@ POLICIES: Dict[str, Dict] = {
     "traefik": {
         "name": "traefik-policy",
         "rules": """
-            # Traefik читает сертификаты и маркер их статуса/версии
             key_prefix "certs/"                    { policy = "read"  }
             key_prefix "marker/vault/certs_status" { policy = "read"  }
             key_prefix "config/global/"            { policy = "read"  }
 
-            # Чтение каталога и нод для роутинга/health
             node_prefix ""                         { policy = "read"  }
             query_prefix ""                        { policy = "read"  }
             service_prefix ""                      { policy = "read"  }
@@ -124,7 +124,6 @@ def _api(
 
 
 def _leader_ready(https: bool, timeout: float) -> bool:
-    """Ожидание лидера с экспоненциальным backoff до timeout."""
     deadline = time.time() + max(1.0, timeout)
     delay = max(0.2, RETRY_BASE)
     while time.time() < deadline:
@@ -161,11 +160,23 @@ class ConsulService(ContextMicroservice):
         if not await self._start_consul(cfg=cfg, https=use_tls):
             return
 
+        # Подключим комбинированный TLS-релоадер: SIGHUP агенту + клиентский SSLContext
+        try:
+            srv = SignalTLSReloader(pid=self._child.pid if self._child else None)
+            cli = ClientTLSReloader(ca_file=CA_CERT, cert_file=CONSUL_CERT, key_file=CONSUL_KEY)
+            self.deps.tls_reloader = CombinedTLSReloader([srv, cli])
+            self._client_sslctx = cli.ssl_context  # для локальных проб
+        except Exception:
+            self._client_sslctx = None  # type: ignore[attr-defined]
+
         # 3) set agent token (once agent fully up)
         await self._apply_agent_token()
 
         # 4) attach KV and publish markers (idempotent)
         await self._late_attach_kv_and_publish_markers(use_tls)
+
+        # 5) mTLS-smoke (best-effort): доступ к Vault по внутреннему 443 с клиентскими сертификатами
+        await self._mtls_smoke_best_effort()
 
     async def start(self) -> None:
         self._set_status(ServiceStatus.RUNNING, "consul.up")
@@ -179,7 +190,6 @@ class ConsulService(ContextMicroservice):
         proc = subprocess.Popen(cmd)  # noqa: S603
         self.proc_attach(proc)
 
-        # ждём порта + лидера
         host = SETTINGS.consul.host
         port = SETTINGS.consul.https_port if https else SETTINGS.consul.http_port
         if not await wait_port(host, port, timeout=INIT_TIMEOUT):
@@ -208,7 +218,6 @@ class ConsulService(ContextMicroservice):
                     pass
 
     async def _ensure_init_http(self) -> None:
-        """ACL bootstrap + policies + tokens (HTTP mode). Идемпотентно."""
         loop = asyncio.get_event_loop()
         ok = await loop.run_in_executor(None, _leader_ready, False, INIT_TIMEOUT)
         if not ok:
@@ -223,7 +232,6 @@ class ConsulService(ContextMicroservice):
                 root_token = None
 
         if not root_token:
-            # Bootstrap ACL только если нет management токена
             resp = _api("PUT", "/v1/acl/bootstrap", https=False)
             if resp.status != 200:
                 self.log.error("evt=acl.bootstrap.fail code=%s", resp.status)
@@ -233,7 +241,6 @@ class ConsulService(ContextMicroservice):
             root_token = json.loads(body).get("SecretID", "")
             self.log.info("evt=acl.bootstrap.ok token_saved=%s", ROOT_TOKEN_JSON)
 
-        # Upsert policies (всегда PUT)
         for name, cfg in POLICIES.items():
             _api("PUT", "/v1/acl/policy", token=root_token, https=False, body={
                 "Name": cfg["name"],
@@ -242,7 +249,6 @@ class ConsulService(ContextMicroservice):
             }).read()
             self.log.info("evt=policy.upsert name=%s", cfg["name"])
 
-            # Создаём токен если не сохранён
             token_path = Path(cfg["token_file"])
             if not token_path.exists():
                 t_resp = _api("PUT", "/v1/acl/token", token=root_token, https=False, body={
@@ -280,9 +286,6 @@ class ConsulService(ContextMicroservice):
             self.log.error("evt=agent.token.error err=%s", exc)
 
     async def _late_attach_kv_and_publish_markers(self, use_tls: bool) -> None:
-        """
-        После того как Consul встал и токены созданы - прикрепляем KV и публикуем маркеры.
-        """
         try:
             token = None
             if ROOT_TOKEN_JSON.exists():
@@ -296,18 +299,26 @@ class ConsulService(ContextMicroservice):
             if getattr(self, "deps", None) is not None:
                 self.deps.kv = kv
 
-            # 1) initialized
             kv.marker.svc("consul").initialized.ensure()
-
-            # 2) mTLS готов (если подняли TLS)
             if use_tls:
                 kv.marker.svc("consul").mtls_ready.ensure()
-
-            # 3) минимальный маркер синхронизации каталога
             kv.marker.consul.catalog_synchronized.ensure()
 
         except Exception as exc:  # noqa: BLE001
             log.warning("evt=kv.attach_or_publish.fail err=%s", exc)
+
+    async def _mtls_smoke_best_effort(self) -> None:
+        """
+        Одна мимолётная mTLS-проба: GET https://vault.<domain>/
+        Успех/провал пишем в лог, ничего не фейлим.
+        """
+        try:
+            url = f"https://vault.{SETTINGS.domain.root}/"
+            ctx = getattr(self, "_client_sslctx", None)
+            ok = await asyncio.get_event_loop().run_in_executor(None, probe_https, url, ctx, 2.5)
+            self.log.info("evt=mtls.probe target=%s ok=%s", url, 1 if ok else 0)
+        except Exception as exc:  # noqa: BLE001
+            self.log.warning("evt=mtls.probe.fail err=%s", exc)
 
 
 async def main() -> None:
