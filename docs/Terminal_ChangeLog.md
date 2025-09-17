@@ -8,7 +8,12 @@
 - `source/core/kv/markers.py` - реализовали желаемый интерфейс вида KV.marker.consul.initialized и сохранили существующие generic-методы.
 - `source/core/kv/configs.py` - глобальные ключи и ключи per-service формируются строго через paths.py (единый нейминг).
 - `source/core/kv/certs.py` - ключи certs/* и marker/vault/certs_status формируются строго через paths.py. publish_bundle() синхронно обновляет и JSON-маркер, и "простую" версию (строка), которую уже читает наш TLS-watcher в каркасе сервиса.
-- `source/core/base/service.py` - gодключили запись маркеров в каркасе ContextMicroservice в правильные фазы.
+- `source/core/base/service.py` - подключили запись маркеров в каркасе ContextMicroservice в правильные фазы.
+- Используем фасады KV.marker.svc("<name>").* и специализированные KV.marker.vault.*/KV.marker.consul.*.
+- `source/services/<svc>/main.py` - правки:
+  - Публикация сертификатов и версии - через KV.cert.*.
+  - Для Traefik убран самописный вотчер certs/version: теперь hot-reload делается через каркас (ContextMicroservice следит за certs/version, а мы передаём SignalTLSReloader(pid=...)).
+  - Базовый класс сам пишет универсальные маркеры фаз, но у Consul/Vault KV подключается после запуска - потому идемпотентно дублируем нужные маркеры после attach KV (не мешает и не ломает).
 
 
 ## [2025.09.17]: Унификация логирования и метрик в каркасе ContextMicroservice

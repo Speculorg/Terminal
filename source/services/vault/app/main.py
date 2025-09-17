@@ -1,7 +1,6 @@
 # source/services/vault/app/main.py
 
 from __future__ import annotations
-
 import asyncio
 import json
 import ssl
@@ -18,7 +17,6 @@ from core.settings.settings import SETTINGS
 from core.net.port import wait_port
 from core.logging import get_logger
 from core.kv import KV, build_consul_kv_from_settings
-from core.kv import paths as kvpaths
 
 log = get_logger("vault.app")
 
@@ -41,8 +39,6 @@ KEY_VLT = CERTS_DIR / "vault.key"
 CONSUL_TOKENS_DIR: Final[Path] = Path("/consul/secrets")
 VAULT_CONSUL_TOKEN_FILE: Final[Path] = CONSUL_TOKENS_DIR / "vault_consul_token"
 
-WAIT_HEALTH_SEC: Final[int] = 30
-
 # Тайминги из SETTINGS
 INIT_TIMEOUT = float(SETTINGS.timeouts.init_timeout_s)
 RETRY_BASE   = float(SETTINGS.timeouts.retry_interval_s)
@@ -58,7 +54,7 @@ PKI_ROLE:      Final[str] = SETTINGS.vault.pki_role        # например: "
 PKI_ROOT_TTL:     Final[str] = "87600h"
 PKI_ROLE_MAX_TTL: Final[str] = "720h"
 
-# Лифы - минимальный набор (при необходимости расширим SAN из SETTINGS.policy.san_list)
+# Лифы — минимальный набор
 LEAF_SVCS: Final[dict[str, dict[str, str]]] = {
     "consul":  {"common_name": f"consul.{DOMAIN_ROOT}",  "alt_names": "server.dc-1.consul,consul,localhost"},
     "vault":   {"common_name": f"vault.{DOMAIN_ROOT}",   "alt_names": "vault,localhost"},
@@ -117,7 +113,7 @@ def _health_ok(https: bool, timeout: float) -> bool:
     while time.time() < deadline:
         try:
             resp = _api("GET", "/v1/sys/health", https=https)
-            # 200/429/501/503 - допустимые стадии Vault
+            # 200/429/501/503 — допустимые стадии Vault
             if resp.status in (200, 429, 501, 503):
                 return True
         except Exception:
@@ -131,7 +127,7 @@ class VaultService(ContextMicroservice):
     async def initialize(self) -> None:
         first_run = not (CRT_VLT.exists() and CA_PEM.exists())
 
-        # 1) first boot (HTTP), init/unseal + PKI/KV/Policies/AppRoles -> issue leaf certs (fullchain)
+        # 1) first boot (HTTP): init/unseal + PKI/KV/Policies/AppRoles -> issue leaf certs
         if first_run:
             if not await self._start_vault(cfg=CFG_HTTP, https=False):
                 return
@@ -321,7 +317,7 @@ class VaultService(ContextMicroservice):
             "max_ttl": PKI_ROLE_MAX_TTL,
         }).read()
 
-        # leafs (формируем FULLCHAIN = leaf + issuing_ca/ca_chain)
+        # leafs (FULLCHAIN = leaf + issuing_ca/ca_chain)
         for name, params in LEAF_SVCS.items():
             crt, key = CERTS_DIR / f"{name}.crt", CERTS_DIR / f"{name}.key"
             if crt.exists() and key.exists():
@@ -372,7 +368,6 @@ class VaultService(ContextMicroservice):
         try:
             kv_client = build_consul_kv_from_settings(SETTINGS, token=token)
             kv = KV(kv_client)
-            # присоединим к deps, чтобы базовый сервис мог хартбитить
             if getattr(self, "deps", None) is not None:
                 self.deps.kv = kv
         except Exception as exc:  # noqa: BLE001
@@ -381,13 +376,13 @@ class VaultService(ContextMicroservice):
 
         # Маркеры готовности PKI
         try:
-            kv.marker.ensure_true(kvpaths.M_VAULT_INITIALIZED)
-            kv.marker.ensure_true(kvpaths.M_VAULT_PKI_ROOT_READY)
-            kv.marker.ensure_true(kvpaths.M_VAULT_PKI_INT_READY)
+            kv.marker.vault.initialized.ensure()
+            kv.marker.vault.pki_root_ready.ensure()
+            kv.marker.vault.pki_int_ready.ensure()
         except Exception as exc:  # noqa: BLE001
             self.log.warning("evt=vault.kv.marker.pki.fail err=%s", exc)
 
-        # Публикация PEM
+        # Публикация PEM и версии
         try:
             if CA_PEM.exists():
                 kv.cert.publish_ca_pem(CA_PEM.read_text(encoding="utf-8"))
@@ -399,17 +394,15 @@ class VaultService(ContextMicroservice):
                     svc_pems[svc] = p.read_text(encoding="utf-8")
 
             if svc_pems:
-                # Версию считаем как sha256 всех PEMов (детерминированно)
+                # Версию считаем как sha256 всех PEM (детерминированно по имени сервиса)
                 hasher = hashlib.sha256()
-                # порядок фиксируем по имени сервиса
                 for svc in sorted(svc_pems):
-                    hasher.update(svc.encode("utf-8"))
-                    hasher.update(b"\0")
-                    hasher.update(svc_pems[svc].encode("utf-8"))
-                    hasher.update(b"\0")
+                    hasher.update(svc.encode("utf-8")); hasher.update(b"\0")
+                    hasher.update(svc_pems[svc].encode("utf-8")); hasher.update(b"\0")
                 version = hasher.hexdigest()
+
                 if kv.cert.publish_bundle(svc_pems, version=version):
-                    kv.marker.ensure_true(kvpaths.M_VAULT_PKI_LEAF_READY)
+                    kv.marker.vault.pki_leaf_ready.ensure()
                     self.log.info("evt=vault.kv.certs.published version=%s svcs=%s", version, ",".join(sorted(svc_pems)))
                 else:
                     self.log.warning("evt=vault.kv.certs.publish.false")

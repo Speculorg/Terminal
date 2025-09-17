@@ -1,7 +1,6 @@
 # source/services/consul/app/main.py
 
 from __future__ import annotations
-
 import asyncio
 import json
 import ssl
@@ -17,7 +16,6 @@ from core.settings.settings import SETTINGS
 from core.net.port import wait_port
 from core.logging import get_logger
 from core.kv import KV, build_consul_kv_from_settings
-from core.kv import paths as kvpaths
 
 log = get_logger("consul.app")
 
@@ -45,13 +43,7 @@ RETRY_BASE   = float(SETTINGS.timeouts.retry_interval_s)
 RETRY_MAX    = float(SETTINGS.timeouts.max_retry_interval_s)
 BACKOFF      = float(SETTINGS.timeouts.backoff_factor)
 
-# ----------------------------- ACL policies (tightened & fixed) -----------------------------
-# Минимизируем поверхности доступа. Политики ориентированы на префиксы:
-# - marker/*   - факты (SoT)
-# - status/*   - живые статусы сервисов
-# - certs/*    - публичные сертификаты и версия
-# - config/*   - несекретные конфиги
-# - vault/*    - служебный Consul KV storage для Vault (ОБЯЗАТЕЛЕН!)
+# ----------------------------- ACL policies -----------------------------
 POLICIES: Dict[str, Dict] = {
     "agent": {
         "name": "agent-policy",
@@ -158,7 +150,6 @@ class ConsulService(ContextMicroservice):
             if not await self._start_consul(cfg=CFG_HTTP, https=False):
                 return
             await self._ensure_init_http()
-            # короткая пауза на флеш/лок, затем мягкая остановка агента
             await asyncio.sleep(2.0)
             await self._stop_child()
 
@@ -173,7 +164,7 @@ class ConsulService(ContextMicroservice):
         # 3) set agent token (once agent fully up)
         await self._apply_agent_token()
 
-        # 4) подключить KV и опубликовать маркеры готовности
+        # 4) attach KV and publish markers (idempotent)
         await self._late_attach_kv_and_publish_markers(use_tls)
 
     async def start(self) -> None:
@@ -218,8 +209,6 @@ class ConsulService(ContextMicroservice):
 
     async def _ensure_init_http(self) -> None:
         """ACL bootstrap + policies + tokens (HTTP mode). Идемпотентно."""
-        # If already bootstrapped - OK, но нам всё равно нужно upsert-политики.
-        # Wait HTTP leader
         loop = asyncio.get_event_loop()
         ok = await loop.run_in_executor(None, _leader_ready, False, INIT_TIMEOUT)
         if not ok:
@@ -244,7 +233,7 @@ class ConsulService(ContextMicroservice):
             root_token = json.loads(body).get("SecretID", "")
             self.log.info("evt=acl.bootstrap.ok token_saved=%s", ROOT_TOKEN_JSON)
 
-        # Upsert policies (всегда PUT с новыми правилами)
+        # Upsert policies (всегда PUT)
         for name, cfg in POLICIES.items():
             _api("PUT", "/v1/acl/policy", token=root_token, https=False, body={
                 "Name": cfg["name"],
@@ -253,7 +242,7 @@ class ConsulService(ContextMicroservice):
             }).read()
             self.log.info("evt=policy.upsert name=%s", cfg["name"])
 
-            # Создаём токен только если не сохранён локально
+            # Создаём токен если не сохранён
             token_path = Path(cfg["token_file"])
             if not token_path.exists():
                 t_resp = _api("PUT", "/v1/acl/token", token=root_token, https=False, body={
@@ -297,7 +286,6 @@ class ConsulService(ContextMicroservice):
         try:
             token = None
             if ROOT_TOKEN_JSON.exists():
-                # Для инициализации используем management token - затем можно выдать узкий токен самому сервису
                 token = json.loads(ROOT_TOKEN_JSON.read_text(encoding="utf-8")).get("SecretID", "") or None
             if not token:
                 log.warning("evt=kv.attach.skip reason=no.token")
@@ -305,22 +293,21 @@ class ConsulService(ContextMicroservice):
 
             kv_client = build_consul_kv_from_settings(SETTINGS, token=token)
             kv = KV(kv_client)
-            # Присоединяем KV к deps базового сервиса
             if getattr(self, "deps", None) is not None:
                 self.deps.kv = kv
 
-            # 1) Сообщаем об инициализации (идемпотентно)
-            kv.marker.ensure_true(kvpaths.M_CONSUL_INITIALIZED)
+            # 1) initialized
+            kv.marker.svc("consul").initialized.ensure()
 
-            # 2) Если поднялись на TLS - фиксируем
+            # 2) mTLS готов (если подняли TLS)
             if use_tls:
-                kv.marker.ensure_true(kvpaths.M_CONSUL_MTLS_READY)
+                kv.marker.svc("consul").mtls_ready.ensure()
 
-            # 3) Лидер готов => считаем каталог синхронизированным (минимальный маркер)
-            kv.marker.ensure_true(kvpaths.M_CONSUL_CATALOG_SYNCED)
+            # 3) минимальный маркер синхронизации каталога
+            kv.marker.consul.catalog_synchronized.ensure()
 
         except Exception as exc:  # noqa: BLE001
-            log.warning("evt=kv.attach_or_publish.fail", err=exc)
+            log.warning("evt=kv.attach_or_publish.fail err=%s", exc)
 
 
 async def main() -> None:
