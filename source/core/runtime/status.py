@@ -8,6 +8,7 @@ from enum import Enum
 from typing import Dict, Tuple
 
 class ServiceStatus(str, Enum):
+    STARTING      = "STARTING"
     BOOTSTRAPPING = "BOOTSTRAPPING"
     INITIALIZING  = "INITIALIZING"
     SECURING      = "SECURING"
@@ -22,10 +23,10 @@ class ServiceStatus(str, Enum):
 @dataclass(slots=True)
 class HealthSnapshot:
     state: str = "init"                      # up|down|degraded|init
-    status: ServiceStatus = ServiceStatus.BOOTSTRAPPING
+    status: ServiceStatus = ServiceStatus.STARTING
     tls_active: bool = False
     started_at: float = field(default_factory=lambda: time.time())
-    phase: str = "BOOTSTRAPPING"
+    phase: str = "STARTING"
     reasons: Tuple[str, ...] = tuple()
 
     def to_dict(self) -> Dict[str, object]:

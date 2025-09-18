@@ -73,8 +73,10 @@ POLICIES: Dict[str, Dict] = {
 
             key_prefix "certs/"                   { policy = "write" }
             key_prefix "marker/vault/"            { policy = "write" }
+            key_prefix "status/vault/"            { policy = "write" }
 
             key_prefix "config/global/"           { policy = "read"  }
+            key_prefix "marker/"                  { policy = "read"  }
             key_prefix "status/"                  { policy = "read"  }
 
             service "vault"                       { policy = "write" }
@@ -89,7 +91,13 @@ POLICIES: Dict[str, Dict] = {
         "rules": """
             key_prefix "certs/"                    { policy = "read"  }
             key_prefix "marker/vault/certs_status" { policy = "read"  }
+
+            key_prefix "marker/traefik/"           { policy = "write" }
+            key_prefix "status/traefik/"           { policy = "write" }
+
             key_prefix "config/global/"            { policy = "read"  }
+            key_prefix "marker/"                   { policy = "read"  }
+            key_prefix "status/"                   { policy = "read"  }
 
             node_prefix ""                         { policy = "read"  }
             query_prefix ""                        { policy = "read"  }

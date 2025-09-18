@@ -4,6 +4,12 @@
 ---
 
 
+## [2025.09.18]: Heartbeat/health в KV + снятие жёсткой зависимости от KV в каркасе
+- `source/core/base/service.py` - сделали KV-зависимость ленивой на уровне ContextMicroservice: сервис может стартовать без deps.kv, а сам подключит KV внутри initialize().
+- `source/services/consul/app/main.py` - поправлены ACL-политики.
+- `source/core/runtime/status.py` - добавлен статус STARTING.
+
+
 ## [2025.09.17]: Watch certs/version → hot-reload & client-TLS refresh для всех трёх сервисов
 - `source/core/runtime/tls/version_watch.py` - выносим слежение за certs/version в отдельный переиспользуемый CertsVersionWatcher.
 - `source/services/consul/app/main.py` - добавлен единый watcher.
