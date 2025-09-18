@@ -4,6 +4,43 @@
 ---
 
 
+## [2025.09.18]: KV-sync для статусов/heartbeat
+
+- `source/core/base/service.py`:
+- Добавлен минимальный "ready gate" перед RUNNING (опционально ждать активного TLS: require_tls_for_running).
+- Введён простой контур DEGRADED:
+  - degrade(reason) фиксирует деградацию и переводит сервис в DEGRADED (без рестартов).
+  - recover(reason) снимает конкретную причину; при отсутствии причин - возврат в RUNNING.
+- В KV при status.update() и heartbeat пишутся агрегированные причины деградации.
+- Логи/метрики скорректированы под новые переходы состояний.
+- Безопасная работа при отсутствии deps.kv сохранилась (ленивое подключение из сервисов).
+
+- `source/core/kv/status.py`:
+  - Унифицирована схема KV-статусов:
+    - status/<svc>/status - "снимок" (service, phase, state, ts, reasons, degraded, domain).
+    - status/<svc>/heartbeat - "пульс" (ts, epoch, expires_at, tls_active, degraded).
+  - Реализован TTL по heartbeat через поле expires_at (без серверного TTL).
+  - Добавлен get_recent(svc, within_s=None) для проверки "свежести" heartbeat.
+  - Все записи делают CAS, где возможно; для heartbeat допускается best-effort без CAS.
+  - Совместимость с исходным контрактом kv.status.update()/kv.status.heartbeat() сохранена.
+
+- `source/services/consul/app/main.py`:
+  - ACL-policy Traefik дополнена key_prefix "marker/traefik/" { policy = "write" } (для маркера initialized).
+  - Убраны некорректные вызовы старого TLS-probe (несовпадение сигнатур), приведение к используемому варианту.
+  - Без изменения логики bootstrap/перезапусков.
+
+- `source/services/vault/app/main.py`:
+  - В _publish_certs_to_kv поправлены маркеры готовности и порядок публикации: PEM → bundle → version (как триггер)
+  - Поправлены импорты и логика initialize
+
+- `source/services/traefik/app/main.py`:
+  - Прямой TLS-probe периметра (HTTPS) + установка флага tls_active.
+  - Ленивая интеграция с KV (если есть токен) и постановка маркера marker/traefik/initialized.
+  - Вотчер certs/version: SIGHUP Traefik ⇒ проверка, что HTTPS снова поднят; одноразовый mTLS-smoke к Consul.
+  - При неудачах — degrade("https_reload_failed" | "mtls_to_consul_failed" | "sighup_exception"), при восстановлении — recover(...).
+  - Совместимость с базовым каркасом сохранена, регистрация/health остаются без изменений.
+
+
 ## [2025.09.18]: Heartbeat/health в KV + снятие жёсткой зависимости от KV в каркасе
 - `source/core/base/service.py` - сделали KV-зависимость ленивой на уровне ContextMicroservice: сервис может стартовать без deps.kv, а сам подключит KV внутри initialize().
 - `source/services/consul/app/main.py` - поправлены ACL-политики.

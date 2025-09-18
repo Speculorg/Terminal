@@ -12,7 +12,7 @@ import signal
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Set
 
 from core.settings.settings import SETTINGS, CONFIG_HASH
 from core.runtime.status import ServiceStatus, HealthSnapshot
@@ -62,6 +62,10 @@ class ContextMicroservice:
     update_metrics_every_sec: float = 15.0
     tls_watch_every_sec: float = 10.0  # период опроса версии TLS-бандла
 
+    # Минимальный gate «TLS должен быть активен, прежде чем перейти в RUNNING»
+    # Сервисы могут выставить True, если для них это критично.
+    require_tls_for_running: bool = False
+
     def __init__(self, deps: Optional[ContextMicroserviceDeps] = None) -> None:
         self.deps = deps or ContextMicroserviceDeps()
 
@@ -70,7 +74,7 @@ class ContextMicroservice:
         self._svc_port: int = SETTINGS.context.port
         self._svc_tags: list[str] = list(SETTINGS.context.tags)
 
-        # По умолчанию подключаем регистратора (кроме самих Consul/Vault)
+        # По умолчанию подключаем регистратора
         if self.deps.registrar is None and self._svc_name not in {"consul", "vault"}:
             self.deps.registrar = ConsulRegistrar(
                 service_id=self._svc_name or "service",
@@ -110,6 +114,9 @@ class ContextMicroservice:
         # Версия TLS-бандла, известная сервису (для детекта смены)
         self._last_cert_version: Optional[str] = None
 
+        # Причины деградации (агрегируются, снимаются по recover())
+        self._degraded_reasons: Set[str] = set()
+
     # ----------------------------- Переопределяемые хуки -----------------------------
 
     async def initialize(self) -> None:
@@ -136,11 +143,8 @@ class ContextMicroservice:
     # ----------------------------- Оркестратор -----------------------------
 
     def _kv_required(self) -> bool:
-        """
-        Ленивое подключение: KV не обязателен на входе serve().
-        Сервисы могут присоединять KV внутри initialize().
-        """
-        return False
+        # consul/vault могут стартовать без внешнего KV в фазе bootstrap
+        return self._svc_name not in {"consul", "vault"}
 
     async def serve(self) -> None:
         install_signal_shutdown_flag(self._shutdown, on_signal=self._on_signal)
@@ -152,17 +156,18 @@ class ContextMicroservice:
             self._tick_metrics.start()
             self._tick_tls_watch.start()
 
-            # Попытка опубликовать конфиг до initialize() (если KV уже есть)
+            # Требование KV (для всех, кроме consul/vault)
+            if self._kv_required() and getattr(self.deps, "kv", None) is None:
+                self.log.error("evt=deps.kv.missing", svc=self._svc_name)
+                raise RuntimeError("KV dependency is required for this service (inject via ContextMicroserviceDeps.kv)")
+
+            # Публикация CONFIG_HASH/DOMAIN_ROOT в KV (идемпотентно)
             self._publish_config_hash_once()
 
             # INIT
             self._set_status(ServiceStatus.INITIALIZING, "initialize()")
             await self.initialize()
-
-            # После initialize() KV мог появиться — повторим публикацию (идемпотентно)
-            self._publish_config_hash_once()
-
-            # Маркер инициализации сервиса (best-effort)
+            # Маркер инициализации сервиса
             self._ensure_marker("initialized")
 
             # REGISTER
@@ -172,8 +177,15 @@ class ContextMicroservice:
             # Маркер регистрации сервиса
             self._ensure_marker("registered")
 
+            # READY-GATE (опционально ждём TLS)
+            await self._ready_gate()
+
             # RUN
-            self._set_status(ServiceStatus.RUNNING, "start()")
+            # Если есть активные причины деградации — остаёмся в DEGRADED.
+            if self._degraded_reasons:
+                self._set_status(ServiceStatus.DEGRADED, "degraded:on_enter_run")
+            else:
+                self._set_status(ServiceStatus.RUNNING, "start()")
             await self.start()
 
         except Exception as exc:  # noqa: BLE001
@@ -188,19 +200,28 @@ class ContextMicroservice:
             except Exception as exc:  # noqa: BLE001
                 self._m_reg_deregister_fail.inc(labels={"svc": self._svc_name})
                 self.log.warning("evt=registrar.deregister.failed", svc=self._svc_name, err=exc)
-
             await self._before_stop()
             await self._write_health_tick()
             await self._tick_health.stop()
             await self._tick_metrics.stop()
             await self._tick_tls_watch.stop()
+            self.log.info("evt=stopped", svc=self._svc_name)
 
-            # Финальная фиксация статуса STOPPED (если KV доступен)
-            try:
-                self._set_status(ServiceStatus.STOPPED, "stopped")
-            except Exception:
-                # если уже ERROR/STOPPING и KV недоступен — просто лог
-                self.log.info("evt=stopped", svc=self._svc_name)
+    async def _ready_gate(self) -> None:
+        """
+        Минимальный gate перед RUNNING.
+        По умолчанию: если require_tls_for_running=True, ждём активный TLS ограниченное время.
+        Сервисы могут переопределить метод и добавить свои проверки.
+        """
+        timeout = float(SETTINGS.timeouts.init_timeout_s)
+        if self.require_tls_for_running and not self._tls_active:
+            self._set_status(ServiceStatus.SECURING, "ready_gate.wait_tls")
+            deadline = time.time() + max(1.0, timeout)
+            while time.time() < deadline and not self._tls_active and not self._shutdown.is_set():
+                await asyncio.sleep(0.5)
+            # не блокируем переход — просто зафиксируем состояние, если TLS так и не активировался
+            if not self._tls_active:
+                self.log.warning("evt=ready_gate.tls.not_active", svc=self._svc_name)
 
     # ----------------------------- Health / Status -----------------------------
 
@@ -235,11 +256,14 @@ class ContextMicroservice:
             reason=";".join(reasons) if reasons else "-",
         )
 
-        # ЕДИНАЯ точка записи статуса/фазы в KV (best-effort)
+        # ЕДИНАЯ точка записи статуса/фазы в KV
         kv = getattr(self.deps, "kv", None)
         if kv is not None:
             try:
-                kv.status.update(self._svc_name, st, meta={"reasons": list(reasons) if reasons else []})
+                kv.status.update(self._svc_name, st, meta={
+                    "reasons": list(reasons) if reasons else [],
+                    "degraded": sorted(self._degraded_reasons),
+                })
             except Exception as exc:  # noqa: BLE001
                 self._m_kv_status_update_fail.inc(labels={"svc": self._svc_name})
                 self.log.warning("evt=kv.status.update.fail", svc=self._svc_name, phase=st.value, err=exc)
@@ -250,6 +274,7 @@ class ContextMicroservice:
             "service": self._svc_name,
             "domain": SETTINGS.domain.root,
             "tls_active": self._tls_active,
+            "degraded_reasons": sorted(self._degraded_reasons),
         })
         return snap
 
@@ -259,11 +284,13 @@ class ContextMicroservice:
         except Exception as exc:  # noqa: BLE001
             self.log.warning("evt=health.write.fail", svc=self._svc_name, err=exc)
 
-        # Параллельно - heartbeat в KV (best-effort)
+        # Параллельно - heartbeat в KV
         kv = getattr(self.deps, "kv", None)
         if kv is not None:
             try:
-                kv.status.heartbeat(self._svc_name, tls_active=self._tls_active)
+                kv.status.heartbeat(self._svc_name, tls_active=self._tls_active, meta={
+                    "degraded": sorted(self._degraded_reasons)
+                })
             except Exception as exc:  # noqa: BLE001
                 self._m_kv_heartbeat_fail.inc(labels={"svc": self._svc_name})
                 self.log.warning("evt=kv.heartbeat.fail", svc=self._svc_name, err=exc)
@@ -300,21 +327,22 @@ class ContextMicroservice:
     def metrics_text(self) -> str:
         return self._mx.render_prometheus()
 
-    # ----------------------------- TLS Version Watcher (fallback) -----------------------------
+    # ----------------------------- TLS Version Watcher -----------------------------
 
     async def _tls_watch_tick(self) -> None:
         """
-        Лёгкий fallback-пуллинг certs/version из KV.
-        Большинство сервисов используют специализированный CertsVersionWatcher,
-        этот тикер оставлен для обратной совместимости и no-op при отсутствии KV.
+        Периодически читает версию TLS-бандла из KV и, если версия изменилась,
+        инициирует hot-reload через deps.tls_reloader.
         """
         if not getattr(self.deps, "kv", None) or kv_paths is None:
             return
 
         ver = None
         try:
+            # 1) Простая версия (text)
             ver, _ = self.deps.kv.get_text(kv_paths.CERTS_VERSION)
             if not ver:
+                # 2) Маркерный JSON
                 js, _ = self.deps.kv.get_json(kv_paths.CERTS_STATUS)
                 if isinstance(js, dict) and "version" in js:
                     ver = str(js.get("version") or "").strip()
@@ -339,6 +367,36 @@ class ContextMicroservice:
                 except Exception as exc:  # noqa: BLE001
                     self._m_tls_reload_fail.inc(labels={"svc": self._svc_name})
                     self.log.warning("evt=tls.reload.fail", svc=self._svc_name, version=ver, err=exc)
+
+    # ----------------------------- Degrade helpers -----------------------------
+
+    def degrade(self, reason: str) -> None:
+        """
+        Зафиксировать деградацию по причине `reason`. Статус переводится в DEGRADED,
+        если не был в нём. Причина добавляется к агрегату причин.
+        """
+        reason = (reason or "").strip()
+        if not reason:
+            return
+        if reason not in self._degraded_reasons:
+            self._degraded_reasons.add(reason)
+            self.log.warning("evt=degraded.add", svc=self._svc_name, reason=reason, reasons=sorted(self._degraded_reasons))
+        if self._status is ServiceStatus.RUNNING:
+            self._set_status(ServiceStatus.DEGRADED, f"degraded:{reason}")
+
+    def recover(self, reason: str) -> None:
+        """
+        Снять конкретную причину деградации. Если причин больше не осталось и
+        сервис был в DEGRADED — вернуть статус RUNNING.
+        """
+        reason = (reason or "").strip()
+        if not reason:
+            return
+        if reason in self._degraded_reasons:
+            self._degraded_reasons.remove(reason)
+            self.log.info("evt=degraded.remove", svc=self._svc_name, reason=reason, reasons=sorted(self._degraded_reasons))
+        if self._status is ServiceStatus.DEGRADED and not self._degraded_reasons:
+            self._set_status(ServiceStatus.RUNNING, "recovered")
 
     # ----------------------------- Shutdown / Signals -----------------------------
 
@@ -371,14 +429,16 @@ class ContextMicroservice:
     def _publish_config_hash_once(self) -> None:
         """
         Идемпотентно публикует текущий CONFIG_HASH и DOMAIN_ROOT в KV.
-        Вызывается до и после initialize() (на случай ленивого подключения KV).
+        Используется на старте, до initialize().
         """
         kv = getattr(self.deps, "kv", None)
         if kv is None:
             return
         try:
+            # config/global/config_hash
             if not kv.config.set_config_hash(CONFIG_HASH):
                 self.log.warning("evt=kv.config_hash.write.false", svc=self._svc_name)
+            # config/global/domain_root (подтверждение домена)
             if not kv.config.set_domain_root(SETTINGS.domain.root):
                 self.log.warning("evt=kv.domain_root.write.false", svc=self._svc_name)
         except Exception as exc:  # noqa: BLE001

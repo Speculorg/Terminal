@@ -1,6 +1,7 @@
-# source\services\vault\app\main.py
+# source/services/vault/app/main.py
 
 from __future__ import annotations
+
 import asyncio
 import json
 import ssl
@@ -9,20 +10,15 @@ import time
 import http.client
 import hashlib
 from pathlib import Path
-from typing import Final, Dict, Optional
+from typing import Final, Dict
 
 from core.base.service import ContextMicroservice
+from core.runtime.status import ServiceStatus
 from core.settings.settings import SETTINGS
-from core.logging import get_logger
 from core.net.port import wait_port
-from core.net.http.client import probe_https
+from core.logging import get_logger
 from core.kv import KV, build_consul_kv_from_settings
 from core.kv import paths as kvpaths
-from core.runtime.status import ServiceStatus
-from core.runtime.tls.client_reloader import ClientTLSReloader
-from core.runtime.tls.combined_reloader import CombinedTLSReloader
-from core.runtime.tls.version_watch import CertsVersionWatcher
-
 
 log = get_logger("vault.app")
 
@@ -41,14 +37,19 @@ CA_PEM  = CERTS_DIR / "ca.crt"
 CRT_VLT = CERTS_DIR / "vault.crt"
 KEY_VLT = CERTS_DIR / "vault.key"
 
+# Consul tokens issued by Consul service (must be mounted read-only here)
 CONSUL_TOKENS_DIR: Final[Path] = Path("/consul/secrets")
 VAULT_CONSUL_TOKEN_FILE: Final[Path] = CONSUL_TOKENS_DIR / "vault_consul_token"
 
+WAIT_HEALTH_SEC: Final[int] = 30
+
+# Тайминги из SETTINGS
 INIT_TIMEOUT = float(SETTINGS.timeouts.init_timeout_s)
 RETRY_BASE   = float(SETTINGS.timeouts.retry_interval_s)
 RETRY_MAX    = float(SETTINGS.timeouts.max_retry_interval_s)
 BACKOFF      = float(SETTINGS.timeouts.backoff_factor)
 
+# PKI / domain (из SETTINGS)
 DOMAIN_ROOT: Final[str] = SETTINGS.domain.root
 PKI_ROOT_PATH: Final[str] = SETTINGS.vault.pki_root_path
 PKI_INT_PATH:  Final[str] = SETTINGS.vault.pki_int_path
@@ -123,15 +124,10 @@ def _health_ok(https: bool, timeout: float) -> bool:
 
 # ----------------------------- Service -----------------------------
 class VaultService(ContextMicroservice):
-    def __init__(self) -> None:
-        super().__init__()
-        self._client_sslctx = None
-        self._tls_watch_task: Optional[asyncio.Task] = None
-
     async def initialize(self) -> None:
         first_run = not (CRT_VLT.exists() and CA_PEM.exists())
 
-        # 1) first boot (HTTP)
+        # 1) first boot (HTTP): init/unseal + PKI/KV/Policies/AppRoles -> issue leaf certs
         if first_run:
             if not await self._start_vault(cfg=CFG_HTTP, https=False):
                 return
@@ -146,40 +142,15 @@ class VaultService(ContextMicroservice):
             return
         self.svc_set_tls_active(True)
 
-        # Комбинированный TLS-релоадер: только клиентский контекст (Vault server не принимает SIGHUP для PKI)
-        try:
-            cli = ClientTLSReloader(ca_file=CA_PEM, cert_file=CRT_VLT, key_file=KEY_VLT)
-            self.deps.tls_reloader = CombinedTLSReloader([cli])
-            self._client_sslctx = cli.ssl_context
-        except Exception:
-            self._client_sslctx = None  # type: ignore[assignment]
-
-        # 3) Publish certs/version to KV (и подключим KV в deps)
+        # 3) Публикация PEM и версии в KV (после HTTPS старта; порядок: PEM -> bundle -> version)
         await self._publish_certs_to_kv()
-
-        # 4) Watch certs/version → client TLS refresh
-        if getattr(self.deps, "kv", None) and getattr(self.deps, "tls_reloader", None):
-            watcher = CertsVersionWatcher(self.deps.kv, self.deps.tls_reloader, kvpaths.CERTS_VERSION, 2.0, self.log)
-            self._tls_watch_task = asyncio.create_task(watcher.run(self._shutdown))
-
-        # 5) mTLS-smoke: доступ к Consul по внутреннему 443
-        await self._mtls_smoke_best_effort()
 
     async def start(self) -> None:
         self._set_status(ServiceStatus.RUNNING, "vault.up")
         while not getattr(self, "_shutdown").is_set():
             await asyncio.sleep(5)
 
-    async def stop(self) -> None:
-        if self._tls_watch_task and not self._tls_watch_task.done():
-            self._tls_watch_task.cancel()
-            try:
-                await self._tls_watch_task
-            except Exception:
-                pass
-        await super().stop()
-
-    # -- helpers (инициализация/политики/PKI: оставьте ваши текущие реализации) --
+    # -- helpers --
     async def _start_vault(self, *, cfg: str, https: bool) -> bool:
         cmd = ["vault", "server", f"-config={cfg}"]
         self.log.info("evt=proc.start app=vault mode=%s cmd=%s", "https" if https else "http", " ".join(cmd))
@@ -213,6 +184,7 @@ class VaultService(ContextMicroservice):
                 except Exception:
                     pass
 
+    # -- init/unseal/kv/policies/pki (HTTP) --
     async def _ensure_init_unseal_http(self) -> None:
         resp = _api("GET", "/v1/sys/health", https=False)
         data = json.loads(resp.read().decode("utf-8") or "{}")
@@ -364,6 +336,7 @@ class VaultService(ContextMicroservice):
             self.log.info("evt=vault.pki.leaf.saved name=%s crt=%s key=%s", name, crt, key)
 
     # ----------------------------- Publish certs to KV -----------------------------
+
     async def _publish_certs_to_kv(self) -> None:
         token = None
         try:
@@ -385,41 +358,47 @@ class VaultService(ContextMicroservice):
             self.log.warning("evt=vault.kv.attach.fail err=%s", exc)
             return
 
+        # Маркеры PKI готовности
         try:
-            kv.marker.vault.initialized.ensure()
-            kv.marker.vault.pki_root_ready.ensure()
-            kv.marker.vault.pki_int_ready.ensure()
+            kv.marker.ensure_true(kvpaths.M_VAULT_INITIALIZED)
+            kv.marker.ensure_true(kvpaths.M_VAULT_PKI_ROOT_READY)
+            kv.marker.ensure_true(kvpaths.M_VAULT_PKI_INT_READY)
+        except Exception as exc:  # noqa: BLE001
+            self.log.warning("evt=vault.kv.marker.pki.fail err=%s", exc)
 
+        # Порядок публикации: PEM → bundle → version (как триггер)
+        try:
             svc_pems: Dict[str, str] = {}
+            if CA_PEM.exists():
+                kv.cert.publish_ca_pem(CA_PEM.read_text(encoding="utf-8"))
+
             for svc in ("consul", "vault", "traefik"):
                 p = CERTS_DIR / f"{svc}.crt"
                 if p.exists():
                     svc_pems[svc] = p.read_text(encoding="utf-8")
 
-            if (CERTS_DIR / "ca.crt").exists():
-                kv.cert.publish_ca_pem((CERTS_DIR / "ca.crt").read_text(encoding="utf-8"))
-
             if svc_pems:
-                h = hashlib.sha256()
-                for name in sorted(svc_pems):
-                    h.update(name.encode()); h.update(b"\0"); h.update(svc_pems[name].encode()); h.update(b"\0")
-                ver = h.hexdigest()
-                if kv.cert.publish_bundle(svc_pems, version=ver):
-                    kv.marker.vault.pki_leaf_ready.ensure()
-                    self.log.info("evt=vault.kv.certs.published version=%s", ver)
-                else:
+                hasher = hashlib.sha256()
+                for svc in sorted(svc_pems):
+                    hasher.update(svc.encode("utf-8")); hasher.update(b"\0")
+                    hasher.update(svc_pems[svc].encode("utf-8")); hasher.update(b"\0")
+                version = hasher.hexdigest()
+
+                # 1) bundle (certs/<svc>.crt) + status JSON (для совместимости вотчеров)
+                ok_bundle = kv.cert.publish_bundle(svc_pems, version=version, publish_status_json=True)
+                if not ok_bundle:
                     self.log.warning("evt=vault.kv.certs.publish.false")
+                else:
+                    # 2) явный маркер, что leaf-сертификаты готовы
+                    kv.marker.ensure_true(kvpaths.M_VAULT_PKI_LEAF_READY)
+                    # 3) текстовая версия (последняя операция — триггер)
+                    kv.cert.publish_version(version)
+                    self.log.info("evt=vault.kv.certs.published version=%s svcs=%s",
+                                  version, ",".join(sorted(svc_pems)))
+            else:
+                self.log.warning("evt=vault.kv.certs.skip reason=no.svc_pems")
         except Exception as exc:  # noqa: BLE001
             self.log.warning("evt=vault.kv.certs.publish.fail err=%s", exc)
-
-    async def _mtls_smoke_best_effort(self) -> None:
-        try:
-            url = f"https://consul.{SETTINGS.domain.root}/v1/status/leader"
-            ctx = self._client_sslctx
-            ok = await asyncio.get_event_loop().run_in_executor(None, probe_https, url, ctx, 2.5)
-            self.log.info("evt=mtls.probe target=%s ok=%s", url, 1 if ok else 0)
-        except Exception as exc:  # noqa: BLE001
-            self.log.warning("evt=mtls.probe.fail err=%s", exc)
 
 
 async def main() -> None:
