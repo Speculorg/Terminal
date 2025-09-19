@@ -4,26 +4,35 @@
 ---
 
 
+## [2025.09.19]: Шлифовка KV-путей
+
+- `source/core/kv/paths.py`:
+  - Нормализованы префиксы: marker/…, status/<svc>/status, status/<svc>/heartbeat, certs/*, config/*.
+  - Добавлены фабрики для сервисных маркеров (marker_svc_flag), статусов и конфигов.
+  - Экспортированы именованные константы для часто используемых ключей: Consul/Vault/Traefik маркеры, CERTS_VERSION, CERTS_CA_PEM, и т.д.
+  - Комментарии и чёткая группировка - чтобы не плодились "магические строки" по коду.
+
+
 ## [2025.09.19]: Шлифовка TLS-watch, KV, ACL
 
 - `source/core/runtime/tls/reloaders.py`:
-  - CallbackTLSReloader — вызывает произвольный callback на смене версии (используем для Consul → управляемый рестарт).
-  - Оставлены и «подчистили» существующие: NoopTLSReloader, ProcSignalTLSReloader (для Traefik — SIGHUP).
+  - CallbackTLSReloader - вызывает произвольный callback на смене версии (используем для Consul → управляемый рестарт).
+  - Оставлены и "подчистили" существующие: NoopTLSReloader, ProcSignalTLSReloader (для Traefik - SIGHUP).
 
 - `source/core/base/service.py`:
   - Убран ранний KV-gate до initialize(); теперь KV проверяется после initialize().
   - В _kv_required() добавлен traefik в исключения: {"consul","vault","traefik"}.
-  - Это совместимо со всеми сервисами: Consul/Vault стартуют без KV, остальные — либо инжектят KV заранее, либо подключают его в initialize().
+  - Это совместимо со всеми сервисами: Consul/Vault стартуют без KV, остальные - либо инжектят KV заранее, либо подключают его в initialize().
 
 - `source/services/consul/app/main.py`:
-  - В __init__ сервиса — подключён CallbackTLSReloader, который по смене certs/version вызывает управляемый рестарт (через базовый каркас).
+  - В __init__ сервиса - подключён CallbackTLSReloader, который по смене certs/version вызывает управляемый рестарт (через базовый каркас).
   - Больше никаких прямых вызовов старых probe_tls/probe_https: ждём порт и лидера, а TLS-переход делает watcher+reloader.
   - В POLICIES['traefik'] добавлено право: key_prefix "marker/traefik/" { policy = "write" }.
 
 - `source/services/traefik/app/main.py`:
   - Убрали собственный watch_certs_version_loop и все связанные поля/таски.
   - Настроили self.deps.tls_reloader = ProcSignalTLSReloader("traefik", lambda: self._child, signum=SIGHUP), полностью полагаемся на общий watcher из базового класса.
-  - Инициализационный маркер (initialized) — оставили (best-effort).
+  - Инициализационный маркер (initialized) - оставили (best-effort).
 
 
 ## [2025.09.18]: KV-sync для статусов/heartbeat
@@ -59,7 +68,7 @@
   - Прямой TLS-probe периметра (HTTPS) + установка флага tls_active.
   - Ленивая интеграция с KV (если есть токен) и постановка маркера marker/traefik/initialized.
   - Вотчер certs/version: SIGHUP Traefik ⇒ проверка, что HTTPS снова поднят; одноразовый mTLS-smoke к Consul.
-  - При неудачах — degrade("https_reload_failed" | "mtls_to_consul_failed" | "sighup_exception"), при восстановлении — recover(...).
+  - При неудачах - degrade("https_reload_failed" | "mtls_to_consul_failed" | "sighup_exception"), при восстановлении - recover(...).
   - Совместимость с базовым каркасом сохранена, регистрация/health остаются без изменений.
 
 

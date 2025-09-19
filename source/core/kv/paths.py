@@ -1,51 +1,88 @@
-# source\core\kv\paths.py
-
-"""
-core.kv.paths
-Единый нейминг ключей KV.
-"""
+# source/core/kv/paths.py
 
 from __future__ import annotations
-from typing import Final
 
-# ---- marker (факты/вехи) ----
-MARKER: Final[str] = "marker"
-LEGACY_MARKERS: Final[str] = "markers"  # для чтения (совместимость)
+"""
+Единая точка правды для KV-ключей (SoT) в Consul KV.
+Никаких "магических строк" по коду — только эти константы и фабрики.
 
-# consul
-M_CONSUL_INITIALIZED         = f"{MARKER}/consul/initialized"
-M_CONSUL_MTLS_READY          = f"{MARKER}/consul/mtls_ready"
-M_CONSUL_CATALOG_SYNCED      = f"{MARKER}/consul/catalog_synchronized"
+Принципы:
+- Префиксы строго фиксированы: marker/*, status/*, certs/*, config/*.
+- Маркеры — минимальные флаги-факты (идемпотентные).
+- Статусы/heartbeat — «живые» значения с временными метками.
+- Сертификаты — только публичные PEM/версия.
+- Конфиги — несекретные параметры (глобальные/сервисные).
+"""
 
-# vault
-M_VAULT_INITIALIZED          = f"{MARKER}/vault/initialized"
-M_VAULT_PKI_ROOT_READY       = f"{MARKER}/vault/pki_root_ready"
-M_VAULT_PKI_INT_READY        = f"{MARKER}/vault/pki_int_ready"
-M_VAULT_PKI_LEAF_READY       = f"{MARKER}/vault/pki_leaf_ready"
-M_VAULT_CERTS_STATUS         = f"{MARKER}/vault/certs_status"  # JSON {"version":..,"updated_at":..,"meta":...}
+# ----------------------------- Базовые префиксы -----------------------------
+MARKER_PREFIX = "marker"
+STATUS_PREFIX = "status"
+CERTS_PREFIX  = "certs"
+CONFIG_PREFIX = "config"
 
-# traefik
-M_TRAEFIK_INITIALIZED        = f"{MARKER}/traefik/initialized"
-M_TRAEFIK_REGISTERED         = f"{MARKER}/traefik/registered"
-M_TRAEFIK_CONSUL_CATALOG_OK  = f"{MARKER}/traefik/consul_catalog_available"
+# ----------------------------- Фабрики ключей -------------------------------
 
-# ---- status (статусы/фазы сервисов) ----
-STATUS: Final[str] = "status"
-def status_key(svc: str) -> str:
-    return f"{STATUS}/{svc.strip()}"
+def marker_svc_flag(svc: str, flag: str) -> str:
+    """marker/<svc>/<flag>"""
+    return f"{MARKER_PREFIX}/{svc}/{flag}"
 
-# ---- certs (публичные сертификаты) ----
-CERTS: Final[str] = "certs"
-CERTS_CA_PEM                  = f"{CERTS}/ca.crt"
-def certs_svc_pem(svc: str) -> str:
-    return f"{CERTS}/{svc.strip()}.crt"
-CERTS_VERSION                 = f"{CERTS}/version"  # int|hash строкой
-CERTS_STATUS                  = M_VAULT_CERTS_STATUS
+def status_snapshot_key(svc: str) -> str:
+    """status/<svc>/status"""
+    return f"{STATUS_PREFIX}/{svc}/status"
 
-# ---- config (несекретные конфиги) ----
-CONFIG: Final[str] = "config"
-CONFIG_GLOBAL_DOMAIN_ROOT     = f"{CONFIG}/global/domain_root"
-CONFIG_GLOBAL_CONFIG_HASH     = f"{CONFIG}/global/config_hash"
-CONFIG_GLOBAL_CONFIG_VERS     = f"{CONFIG}/global/config_versions"
-def config_svc_key(svc: str, name: str) -> str:
-    return f"{CONFIG}/{svc.strip()}/{name.strip()}"
+def status_heartbeat_key(svc: str) -> str:
+    """status/<svc>/heartbeat"""
+    return f"{STATUS_PREFIX}/{svc}/heartbeat"
+
+def certs_service_crt(svc: str) -> str:
+    """certs/<svc>.crt (публичный fullchain PEM)"""
+    return f"{CERTS_PREFIX}/{svc}.crt"
+
+def config_global_key(name: str) -> str:
+    """config/global/<name>"""
+    return f"{CONFIG_PREFIX}/global/{name}"
+
+def config_service_key(svc: str, name: str) -> str:
+    """config/<svc>/<name>"""
+    return f"{CONFIG_PREFIX}/{svc}/{name}"
+
+# ----------------------------- Частые ключи: certs --------------------------
+
+CERTS_CA_PEM   = f"{CERTS_PREFIX}/ca.crt"
+CERTS_VERSION  = f"{CERTS_PREFIX}/version"
+CERTS_STATUS   = f"{MARKER_PREFIX}/vault/certs_status"  # JSON-статус PKI/ротации (best-effort)
+
+# ----------------------------- Частые ключи: config -------------------------
+
+CONFIG_GLOBAL_DOMAIN_ROOT = config_global_key("domain_root")
+CONFIG_GLOBAL_CONFIG_HASH = config_global_key("config_hash")
+
+# ----------------------------- Маркеры: Consul ------------------------------
+
+M_CONSUL_INITIALIZED      = marker_svc_flag("consul", "initialized")
+M_CONSUL_MTLS_READY       = marker_svc_flag("consul", "mtls_ready")
+M_CONSUL_CATALOG_SYNCED   = marker_svc_flag("consul", "catalog_synchronized")
+M_CONSUL_REGISTERED       = marker_svc_flag("consul", "registered")
+
+# ----------------------------- Маркеры: Vault -------------------------------
+
+M_VAULT_INITIALIZED       = marker_svc_flag("vault", "initialized")
+M_VAULT_PKI_ROOT_READY    = marker_svc_flag("vault", "pki_root_ready")
+M_VAULT_PKI_INT_READY     = marker_svc_flag("vault", "pki_int_ready")
+M_VAULT_PKI_LEAF_READY    = marker_svc_flag("vault", "pki_leaf_ready")
+# Статус/версия сертификатов публикуется в CERTS_STATUS и CERTS_VERSION
+
+# ----------------------------- Маркеры: Traefik -----------------------------
+
+M_TRAEFIK_INITIALIZED     = marker_svc_flag("traefik", "initialized")
+M_TRAEFIK_REGISTERED      = marker_svc_flag("traefik", "registered")
+M_TRAEFIK_CONSULCAT_OK    = marker_svc_flag("traefik", "consul_catalog_available")
+
+# ----------------------------- Вспомогательные фабрики ----------------------
+
+def certs_for_services(*services: str) -> dict[str, str]:
+    """
+    Удобный билдер набора ключей certs/<svc>.crt по списку сервисов.
+    Пример: certs_for_services("consul", "vault", "traefik")
+    """
+    return {svc: certs_service_crt(svc) for svc in services}
