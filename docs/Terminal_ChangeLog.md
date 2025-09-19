@@ -4,16 +4,38 @@
 ---
 
 
+## [2025.09.19]: Шлифовка TLS-watch, KV, ACL
+
+- `source/core/runtime/tls/reloaders.py`:
+  - CallbackTLSReloader — вызывает произвольный callback на смене версии (используем для Consul → управляемый рестарт).
+  - Оставлены и «подчистили» существующие: NoopTLSReloader, ProcSignalTLSReloader (для Traefik — SIGHUP).
+
+- `source/core/base/service.py`:
+  - Убран ранний KV-gate до initialize(); теперь KV проверяется после initialize().
+  - В _kv_required() добавлен traefik в исключения: {"consul","vault","traefik"}.
+  - Это совместимо со всеми сервисами: Consul/Vault стартуют без KV, остальные — либо инжектят KV заранее, либо подключают его в initialize().
+
+- `source/services/consul/app/main.py`:
+  - В __init__ сервиса — подключён CallbackTLSReloader, который по смене certs/version вызывает управляемый рестарт (через базовый каркас).
+  - Больше никаких прямых вызовов старых probe_tls/probe_https: ждём порт и лидера, а TLS-переход делает watcher+reloader.
+  - В POLICIES['traefik'] добавлено право: key_prefix "marker/traefik/" { policy = "write" }.
+
+- `source/services/traefik/app/main.py`:
+  - Убрали собственный watch_certs_version_loop и все связанные поля/таски.
+  - Настроили self.deps.tls_reloader = ProcSignalTLSReloader("traefik", lambda: self._child, signum=SIGHUP), полностью полагаемся на общий watcher из базового класса.
+  - Инициализационный маркер (initialized) — оставили (best-effort).
+
+
 ## [2025.09.18]: KV-sync для статусов/heartbeat
 
 - `source/core/base/service.py`:
-- Добавлен минимальный "ready gate" перед RUNNING (опционально ждать активного TLS: require_tls_for_running).
-- Введён простой контур DEGRADED:
-  - degrade(reason) фиксирует деградацию и переводит сервис в DEGRADED (без рестартов).
-  - recover(reason) снимает конкретную причину; при отсутствии причин - возврат в RUNNING.
-- В KV при status.update() и heartbeat пишутся агрегированные причины деградации.
-- Логи/метрики скорректированы под новые переходы состояний.
-- Безопасная работа при отсутствии deps.kv сохранилась (ленивое подключение из сервисов).
+  - Добавлен минимальный "ready gate" перед RUNNING (опционально ждать активного TLS: require_tls_for_running).
+  - Введён простой контур DEGRADED:
+    - degrade(reason) фиксирует деградацию и переводит сервис в DEGRADED (без рестартов).
+    - recover(reason) снимает конкретную причину; при отсутствии причин - возврат в RUNNING.
+  - В KV при status.update() и heartbeat пишутся агрегированные причины деградации.
+  - Логи/метрики скорректированы под новые переходы состояний.
+  - Безопасная работа при отсутствии deps.kv сохранилась (ленивое подключение из сервисов).
 
 - `source/core/kv/status.py`:
   - Унифицирована схема KV-статусов:

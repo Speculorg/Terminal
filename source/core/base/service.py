@@ -143,8 +143,8 @@ class ContextMicroservice:
     # ----------------------------- Оркестратор -----------------------------
 
     def _kv_required(self) -> bool:
-        # consul/vault могут стартовать без внешнего KV в фазе bootstrap
-        return self._svc_name not in {"consul", "vault"}
+        # consul/vault/traefik могут стартовать без внешнего KV (ленивое подключение в initialize())
+        return self._svc_name not in {"consul", "vault", "traefik"}
 
     async def serve(self) -> None:
         install_signal_shutdown_flag(self._shutdown, on_signal=self._on_signal)
@@ -156,17 +156,20 @@ class ContextMicroservice:
             self._tick_metrics.start()
             self._tick_tls_watch.start()
 
-            # Требование KV (для всех, кроме consul/vault)
-            if self._kv_required() and getattr(self.deps, "kv", None) is None:
-                self.log.error("evt=deps.kv.missing", svc=self._svc_name)
-                raise RuntimeError("KV dependency is required for this service (inject via ContextMicroserviceDeps.kv)")
-
-            # Публикация CONFIG_HASH/DOMAIN_ROOT в KV (идемпотентно)
+            # Публикация CONFIG_HASH/DOMAIN_ROOT в KV (идемпотентно, если KV есть уже сейчас)
             self._publish_config_hash_once()
 
-            # INIT
+            # INIT (ленивое подключение зависимостей делается внутри initialize())
             self._set_status(ServiceStatus.INITIALIZING, "initialize()")
             await self.initialize()
+            # Если для сервиса KV обязателен, но после initialize() его всё ещё нет — это ошибка конфигурации
+            if self._kv_required() and getattr(self.deps, "kv", None) is None:
+                self.log.error("evt=deps.kv.missing.post_init", svc=self._svc_name)
+                raise RuntimeError(
+                    "KV dependency is required after initialize() for this service "
+                    "(inject via ContextMicroserviceDeps.kv or attach during initialize())"
+                )
+
             # Маркер инициализации сервиса
             self._ensure_marker("initialized")
 

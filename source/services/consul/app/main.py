@@ -1,7 +1,6 @@
 # source/services/consul/app/main.py
 
 from __future__ import annotations
-
 import asyncio
 import json
 import ssl
@@ -14,13 +13,14 @@ from typing import Dict, Optional
 from core.base.service import ContextMicroservice
 from core.runtime.status import ServiceStatus
 from core.settings.settings import SETTINGS
-from core.net.port import wait_port
 from core.logging import get_logger
+from core.net.port import wait_port
 from core.kv import KV, build_consul_kv_from_settings
 from core.kv import paths as kvpaths
+from core.runtime.tls.reloaders import CallbackTLSReloader
+
 
 log = get_logger("consul.app")
-
 
 # ----------------------------- Paths & Const -----------------------------
 CERTS_DIR = Path(SETTINGS.paths.tls_certs_dir)
@@ -45,8 +45,6 @@ RETRY_BASE   = float(SETTINGS.timeouts.retry_interval_s)
 RETRY_MAX    = float(SETTINGS.timeouts.max_retry_interval_s)
 BACKOFF      = float(SETTINGS.timeouts.backoff_factor)
 
-TLS_SWITCH_POLL_SEC = 2.0  # период опроса готовности TLS/PKI
-
 # ----------------------------- ACL policies -----------------------------
 POLICIES: Dict[str, Dict] = {
     "agent": {
@@ -67,10 +65,9 @@ POLICIES: Dict[str, Dict] = {
             key_prefix "vault/"                   { policy = "write" }
             session_prefix ""                     { policy = "write" }
 
-            # Vault публикует статус, сертификаты и статус ротации
+            # Vault публикует сертификаты и статус ротации
             key_prefix "certs/"                   { policy = "write" }
             key_prefix "marker/vault/"            { policy = "write" }
-            key_prefix "status/vault/"            { policy = "write" }
 
             # Vault читает глобальные конфиги/статусы
             key_prefix "config/global/"           { policy = "read"  }
@@ -87,20 +84,25 @@ POLICIES: Dict[str, Dict] = {
     "traefik": {
         "name": "traefik-policy",
         "rules": """
-            # Traefik читает сертификаты и маркеры Vault о версии
-            key_prefix "certs/"                    { policy = "read"  }
-            key_prefix "marker/vault/"             { policy = "read"  }
-            key_prefix "config/global/"            { policy = "read"  }
+            # Traefik читает сертификаты и маркер их статуса/версии
+            key_prefix "certs/"                     { policy = "read"  }
+            key_prefix "marker/vault/certs_status"  { policy = "read"  }
+            key_prefix "config/global/"             { policy = "read"  }
 
-            key_prefix "marker/"                   { policy = "read"  }
-            key_prefix "status/"                   { policy = "read"  }
-            key_prefix "marker/traefik/"           { policy = "write" }
-            key_prefix "status/traefik/"           { policy = "write" }
+            # Traefik публикует СВОИ маркеры и статусы (read+write)
+            key_prefix "marker/traefik/"            { policy = "write" }
+            key_prefix "status/traefik/"            { policy = "write" }
 
-            # Каталог/сервисы для роутинга/health
-            node_prefix ""                         { policy = "read"  }
-            query_prefix ""                        { policy = "read"  }
-            service_prefix ""                      { policy = "read"  }
+            # Временная поблажка для опечатки 'markers' (уберём после фикса кода)
+            key_prefix "markers/traefik/"           { policy = "read"  }
+
+            # Разрешаем регистрацию самого сервиса в агенте
+            service "traefik"                       { policy = "write" }
+
+            # Каталог/ноды/запросы для провайдера ConsulCatalog
+            node_prefix ""                          { policy = "read"  }
+            query_prefix ""                         { policy = "read"  }
+            service_prefix ""                       { policy = "read"  }
         """,
         "token_file": TRAEFIK_TOKEN_FILE,
         "desc": "token-for-traefik",
@@ -116,14 +118,7 @@ def _http_conn(https: bool) -> http.client.HTTPConnection | http.client.HTTPSCon
     return http.client.HTTPSConnection(host, SETTINGS.consul.https_port, timeout=6, context=ctx)
 
 
-def _api(
-    method: str,
-    path: str,
-    *,
-    token: str | None = None,
-    https: bool = False,
-    body: Optional[dict] = None
-) -> http.client.HTTPResponse:
+def _api(method: str, path: str, *, token: str | None = None, https: bool = False, body: Optional[dict] = None) -> http.client.HTTPResponse:
     headers = {"Content-Type": "application/json"}
     if token:
         headers["X-Consul-Token"] = token
@@ -148,11 +143,18 @@ def _leader_ready(https: bool, timeout: float) -> bool:
         delay = min(delay * BACKOFF, RETRY_MAX)
     return False
 
+
 # ----------------------------- Service -----------------------------
 class ConsulService(ContextMicroservice):
     def __init__(self) -> None:
         super().__init__()
-        self._tls_switch_task: Optional[asyncio.Task] = None
+        # При смене certs/version выполняем управляемый рестарт (TLS-переход)
+        self.deps.tls_reloader = CallbackTLSReloader(
+            "consul-restart",
+            callback=lambda ver: asyncio.get_event_loop().call_soon_threadsafe(
+                lambda: asyncio.create_task(self.restart())
+            ),
+        )
 
     async def initialize(self) -> None:
         first_run = not AGENT_TOKEN_FILE.exists()
@@ -177,12 +179,8 @@ class ConsulService(ContextMicroservice):
         # 3) set agent token (once agent fully up)
         await self._apply_agent_token()
 
-        # 4) Подключить KV, апсертнуть политики и опубликовать маркеры готовности
+        # 4) late attach KV and publish markers
         await self._late_attach_kv_and_publish_markers(use_tls)
-
-        # 5) Если стартовали в HTTP, запускаем вотчер для автоматического свитча на TLS
-        if not use_tls:
-            self._tls_switch_task = asyncio.create_task(self._watch_tls_and_switch())
 
     async def start(self) -> None:
         self._set_status(ServiceStatus.RUNNING, "consul.up")
@@ -230,7 +228,12 @@ class ConsulService(ContextMicroservice):
             self.log.error("evt=init.abort reason=leader.not.ready")
             return
 
-        root_token = self._read_mgmt_token()
+        root_token = None
+        if ROOT_TOKEN_JSON.exists():
+            try:
+                root_token = json.loads(ROOT_TOKEN_JSON.read_text(encoding="utf-8")).get("SecretID", "")
+            except Exception:
+                root_token = None
 
         if not root_token:
             resp = _api("PUT", "/v1/acl/bootstrap", https=False)
@@ -242,47 +245,30 @@ class ConsulService(ContextMicroservice):
             root_token = json.loads(body).get("SecretID", "")
             self.log.info("evt=acl.bootstrap.ok token_saved=%s", ROOT_TOKEN_JSON)
 
-        self._upsert_policies(root_token, https=False)
-        self._ensure_tokens(root_token)
-        self.log.info("evt=init.ok")
-
-    def _read_mgmt_token(self) -> Optional[str]:
-        try:
-            if ROOT_TOKEN_JSON.exists():
-                data = json.loads(ROOT_TOKEN_JSON.read_text(encoding="utf-8"))
-                return (data.get("SecretID") or data.get("root_token") or "").strip() or None
-        except Exception:
-            return None
-        return None
-
-    def _upsert_policies(self, mgmt_token: str, *, https: bool) -> None:
         for name, cfg in POLICIES.items():
-            try:
-                _api("PUT", "/v1/acl/policy", token=mgmt_token, https=https, body={
-                    "Name": cfg["name"],
-                    "Description": f"auto {name}",
-                    "Rules": cfg["rules"],
-                }).read()
-                self.log.info("evt=policy.upsert name=%s https=%s", cfg["name"], https)
-            except Exception as exc:  # noqa: BLE001
-                self.log.warning("evt=policy.upsert.fail name=%s err=%s", cfg["name"], exc)
+            _api("PUT", "/v1/acl/policy", token=root_token, https=False, body={
+                "Name": cfg["name"],
+                "Description": f"auto {name}",
+                "Rules": cfg["rules"],
+            }).read()
+            self.log.info("evt=policy.upsert name=%s", cfg["name"])
 
-    def _ensure_tokens(self, mgmt_token: str) -> None:
-        for name, cfg in POLICIES.items():
             token_path = Path(cfg["token_file"])
-            if token_path.exists():
-                self.log.info("evt=token.exists path=%s", token_path)
-                continue
-            t_resp = _api("PUT", "/v1/acl/token", token=mgmt_token, https=False, body={
-                "Description": cfg["desc"],
-                "Policies": [{"Name": cfg["name"]}],
-            })
-            if 200 <= t_resp.status < 300:
-                secret = json.loads(t_resp.read().decode("utf-8") or "{}").get("SecretID", "")
-                token_path.write_text(secret, encoding="utf-8")
-                self.log.info("evt=token.saved path=%s", token_path)
+            if not token_path.exists():
+                t_resp = _api("PUT", "/v1/acl/token", token=root_token, https=False, body={
+                    "Description": cfg["desc"],
+                    "Policies": [{"Name": cfg["name"]}],
+                })
+                if 200 <= t_resp.status < 300:
+                    secret = json.loads(t_resp.read().decode("utf-8") or "{}").get("SecretID", "")
+                    token_path.write_text(secret, encoding="utf-8")
+                    self.log.info("evt=token.saved path=%s", token_path)
+                else:
+                    self.log.error("evt=token.create.fail name=%s code=%s", cfg["name"], t_resp.status)
             else:
-                self.log.error("evt=token.create.fail name=%s code=%s", cfg["name"], t_resp.status)
+                self.log.info("evt=token.exists path=%s", token_path)
+
+        self.log.info("evt=init.ok")
 
     async def _apply_agent_token(self) -> None:
         if not (AGENT_TOKEN_FILE.exists() and ROOT_TOKEN_JSON.exists()):
@@ -305,13 +291,12 @@ class ConsulService(ContextMicroservice):
 
     async def _late_attach_kv_and_publish_markers(self, use_tls: bool) -> None:
         try:
-            token = self._read_mgmt_token()
+            token = None
+            if ROOT_TOKEN_JSON.exists():
+                token = json.loads(ROOT_TOKEN_JSON.read_text(encoding="utf-8")).get("SecretID", "") or None
             if not token:
                 log.warning("evt=kv.attach.skip reason=no.token")
                 return
-
-            # На текущем этапе апсертим политики — чтобы изменения применялись и к существующим токенам.
-            self._upsert_policies(token, https=use_tls)
 
             kv_client = build_consul_kv_from_settings(SETTINGS, token=token)
             kv = KV(kv_client)
@@ -325,46 +310,6 @@ class ConsulService(ContextMicroservice):
 
         except Exception as exc:  # noqa: BLE001
             log.warning("evt=kv.attach_or_publish.fail", err=exc)
-
-    # ----------------------------- TLS Switch Watcher -----------------------------
-    async def _watch_tls_and_switch(self) -> None:
-        self.log.info("evt=tls.switch.watch.start poll=%.3fs", TLS_SWITCH_POLL_SEC)
-        while not getattr(self, "_shutdown").is_set():
-            try:
-                files_ready = CA_CERT.exists() and CONSUL_CERT.exists() and CONSUL_KEY.exists()
-                kv_ready = False
-                if getattr(self.deps, "kv", None):
-                    try:
-                        kv_ready = bool(self.deps.kv.marker.is_true(kvpaths.M_VAULT_PKI_LEAF_READY))
-                        if not kv_ready:
-                            ver, _ = self.deps.kv.get_text(kvpaths.CERTS_VERSION)
-                            kv_ready = bool(ver)
-                    except Exception:
-                        kv_ready = False
-
-                if files_ready and kv_ready:
-                    self._set_status(ServiceStatus.TLS_TRANSITION, "consul.switch.https")
-                    self.log.info("evt=tls.switch.begin")
-                    await self._stop_child()
-                    if await self._start_consul(cfg=CFG_HTTPS, https=True):
-                        self.svc_set_tls_active(True)
-                        mgmt = self._read_mgmt_token()
-                        if mgmt:
-                            self._upsert_policies(mgmt, https=True)
-                        try:
-                            if getattr(self.deps, "kv", None):
-                                self.deps.kv.marker.ensure_true(kvpaths.M_CONSUL_MTLS_READY)
-                        except Exception:
-                            pass
-                        self.log.info("evt=tls.switch.done")
-                        return
-                    else:
-                        self.log.warning("evt=tls.switch.retry reason=start_https_failed")
-
-            except Exception as exc:  # noqa: BLE001
-                self.log.warning("evt=tls.switch.watch.err err=%s", exc)
-
-            await asyncio.sleep(TLS_SWITCH_POLL_SEC)
 
 
 async def main() -> None:
