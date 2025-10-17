@@ -1,0 +1,9 @@
+from __future__ import annotations
+from typing import Protocol, runtime_checkable
+from entities.state_enum import StateEnum
+
+@runtime_checkable
+class IFSM(Protocol):
+    def run(self) -> None: ...
+    def on_enter(self, state: StateEnum) -> None: ...
+    def publish_state(self) -> None: ...

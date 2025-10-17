@@ -1,0 +1,39 @@
+from __future__ import annotations
+from typing import Protocol, runtime_checkable
+from .i_configs import IConfigs
+from .i_logger import ILogger
+from .i_metrics import IMetrics
+from .i_net import INet
+from .i_fs import IFS
+from .i_marker import IMarker
+from .i_kv import IKV
+from .i_registrar import IRegistrar
+from .i_fsm import IFSM
+from .i_tls import ITLSReloader, ITLSWatch, ITLSProbe
+
+@runtime_checkable
+class IDeps(Protocol):
+    @property
+    def configs(self) -> IConfigs: ...
+    @property
+    def logger(self) -> ILogger: ...
+    @property
+    def metrics(self) -> IMetrics: ...
+    @property
+    def net(self) -> INet: ...
+    @property
+    def fs(self) -> IFS: ...
+    @property
+    def markers(self) -> IMarker: ...
+    @property
+    def kv(self) -> IKV: ...
+    @property
+    def registrar(self) -> IRegistrar: ...
+    @property
+    def tls_reloader(self) -> ITLSReloader: ...
+    @property
+    def tls_watch(self) -> ITLSWatch: ...
+    @property
+    def tls_probe(self) -> ITLSProbe: ...
+    @property
+    def fsm(self) -> IFSM: ...

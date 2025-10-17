@@ -1,0 +1,15 @@
+from enum import Enum
+
+class ErrorCodeEnum(str, Enum):
+    ERR_TIMEOUT = "ERR_TIMEOUT"
+    ERR_PRECONDITION = "ERR_PRECONDITION"
+    ERR_REGISTRY = "ERR_REGISTRY"
+    ERR_TLS_CHAIN = "ERR_TLS_CHAIN"
+    ERR_PORT = "ERR_PORT"
+    ERR_CAS = "ERR_CAS"
+    ERR_KV = "ERR_KV"
+    ERR_NET = "ERR_NET"
+    ERR_JSON = "ERR_JSON"
+    ERR_IO = "ERR_IO"
+    ERR_PERMS = "ERR_PERMS"
+    ERR_TLS_RELOAD = "ERR_TLS_RELOAD"
