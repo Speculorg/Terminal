@@ -1,3 +1,4 @@
-# Source Directory
+# source/
 
-This directory contains all service and adapter source code for Speculorg.Terminal.
+Корневой модуль проекта. На Этапе 0 содержит только каркас каталогов и пустые `__init__.py`.
+Назначение: обеспечить корректные импорты для следующих этапов (Interfaces, Types, Base, Core, Adapters, Services).

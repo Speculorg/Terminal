@@ -1,44 +1,34 @@
 
 networks:
-
   net_private:
     driver: bridge
     internal: true
 
   net_public:
     driver: bridge
-
-
+ 
 volumes:
-
-  runtime:
-    driver: local
-    driver_opts:
-      type: none
-      o: bind
-      device: ./volumes/runtime
-
-  certs:
-    driver: local
-    driver_opts:
-      type: none
-      o: bind
-      device: ./volumes/certs
-
   consul_data:
     driver: local
     driver_opts:
       type: none
       o: bind
       device: ./volumes/consul_data
-
+  
   vault_data:
     driver: local
     driver_opts:
       type: none
       o: bind
       device: ./volumes/vault_data
-      
+  
+  fs:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ./volumes/fs
+  
   db_data:
     driver: local
     driver_opts:
@@ -46,140 +36,135 @@ volumes:
       o: bind
       device: ./volumes/db_data
 
-
 services:
-
   consul:
     container_name: Consul
     hostname: consul
     build:
       context: ./source/services/consul
+      dockerfile: Dockerfile
     env_file:
-      - ./settings.env
+      - ./configs.env
     environment:
       PYTHONPATH: "/"
       PYTHONUNBUFFERED: "1"
-      SERVICE_NAME: consul #${CONSUL_HOST}
-      SERVICE_PORT: 8501 #${CONSUL_HTTPS_PORT}
-      SERVICE_TAGS: "core,infra,dns,discovery"
-      SERVICE_CONFIG_DIR: "/opt/config"
-      SERVICE_HEALTH_FILE: "/run/terminal/health/consul.json"
+      SERVICE_NAME: "consul"
+      SERVICE_PORT: 8501
+      SERVICE_TAGS: "infra,kv,core"
+      CONSUL_HTTP_TOKEN_FILE: "fs/secrets/consul_token_for_consul"
+    volumes:
+      - ./configs.env:/configs.env:ro
+      - ./source/core:/core:ro
+      - ./source/base:/base:ro
+      - ./source/services:/services:ro
+      - ./source/interfaces:/interfaces:ro
+      - ./source/entities:/entities:ro
+      - ./source/adapters:/adapters:ro
+      - ./source/services/consul/config:/config:rw
+      - ./source/services/consul/app:/app:ro
+      # данные и слой fs/*
+      - consul_data:/consul/data
+      - fs:/certs
+      - fs:/markers
+      - fs:/secrets
+      - fs:/tmp
     networks:
       - net_private
+    ports:
+      - "8500:8500"
+      - "8501:8501"
     labels:
       - "traefik.enable=true"
       - "traefik.http.routers.consul-ui.rule=Host(`consul.terminal.speculorg.localhost`)"
       - "traefik.http.routers.consul-ui.entrypoints=websecure"
       - "traefik.http.routers.consul-ui.tls=true"
       - "traefik.http.services.consul-ui.loadbalancer.server.port=8501"
-    volumes:
-      - consul_data:/consul/data
-      - certs:/certs:ro
-      - runtime:/run/terminal:rw
-      - ./source/services/consul/config:/consul/config:rw
-      - ./source/services/consul/secrets:/consul/secrets
-      - ./source/core:/core:ro
-      - ./source/services/consul/app:/app:ro
     restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "python3", "/core/runtime/health_check.py"]
-      interval: 55s
-      timeout: 15s
-      retries: 3
-      start_period: 120s
 
   vault:
     container_name: Vault
     hostname: vault
     build:
       context: ./source/services/vault
+      dockerfile: Dockerfile
     cap_add:
       - IPC_LOCK 
     env_file:
-      - ./settings.env
+      - ./configs.env
     environment:
       PYTHONPATH: "/"
       PYTHONUNBUFFERED: "1"
-      SERVICE_NAME: vault #${VAULT_HOST}
-      SERVICE_PORT: 8200 #${VAULT_HTTPS_PORT}
-      SERVICE_TAGS: "core,infra,secret"
-      SERVICE_CONFIG_DIR: "/opt/config"
-      SERVICE_HEALTH_FILE: "/run/terminal/health/vault.json"
-      CONSUL_HTTP_TOKEN_FILE: "/consul/secrets/vault_consul_token"
+      SERVICE_NAME: "vault"
+      SERVICE_PORT: 8200
+      SERVICE_TAGS: "infra,ca,core"
+      CONSUL_HTTP_TOKEN_FILE: "fs/secrets/consul_token_for_vault"
+    volumes:
+      - ./configs.env:/configs.env:ro
+      - ./source/core:/core:ro
+      - ./source/base:/base:ro
+      - ./source/services:/services:ro
+      - ./source/interfaces:/interfaces:ro
+      - ./source/entities:/entities:ro
+      - ./source/adapters:/adapters:ro
+      - ./source/services/vault/app:/app:ro
+      - ./source/services/vault/config:/config:rw
+      - vault_data:/vault/file
+      - fs:/certs
+      - fs:/markers
+      - fs:/secrets
+      - fs:/tmp
     networks:
       - net_private
+    ports:
+      - "8200:8200"
+      - "8201:8201"
     labels:
       - "traefik.enable=true"
       - "traefik.http.routers.vault-ui.rule=Host(`vault.terminal.speculorg.localhost`)"
       - "traefik.http.routers.vault-ui.entrypoints=websecure"
       - "traefik.http.routers.vault-ui.tls=true"
       - "traefik.http.services.vault-ui.loadbalancer.server.port=8200"
-    volumes:
-      - vault_data:/vault/file
-      - certs:/certs
-      - runtime:/run/terminal:rw
-      - ./source/services/vault/config:/vault/config
-      - ./source/services/vault/secrets:/vault/secrets
-      - ./source/services/consul/secrets:/consul/secrets:ro
-      - ./source/core:/core:ro
-      - ./source/services/vault/app:/app:ro
-    depends_on:
-      consul:
-        condition: service_healthy
     restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "python3", "/core/runtime/health_check.py"]
-      interval: 55s
-      timeout: 15s
-      retries: 3
-      start_period: 55s
 
   traefik:
     container_name: Traefik
     hostname: traefik
     build:
       context: ./source/services/traefik
+      dockerfile: Dockerfile
     env_file:
-      - ./settings.env
+      - ./configs.env
     environment:
       PYTHONPATH: "/"
       PYTHONUNBUFFERED: "1"
-      SERVICE_NAME: traefik #${TRAEFIK_HOST}
-      SERVICE_PORT: 443 #${TRAEFIK_HTTPS_PORT}
-      SERVICE_TAGS:  "core,infra,proxy"
-      SERVICE_CONFIG_DIR: "/opt/config"
-      SERVICE_HEALTH_FILE: "/run/terminal/health/traefik.json"
-      CONSUL_HTTP_TOKEN_FILE: "/consul/secrets/traefik_consul_token"
-    command:
-      - "--configFile=/etc/traefik/traefik.yml"
+      SERVICE_NAME: "traefik"
+      SERVICE_PORT: 8443
+      SERVICE_TAGS: "infra,edge,core"
+      CONSUL_HTTP_TOKEN_FILE: "fs/secrets/consul_token_for_traefik"
+    volumes:
+      - ./configs.env:/configs.env:ro
+      - ./source/core:/core:ro
+      - ./source/base:/base:ro
+      - ./source/services:/services:ro
+      - ./source/interfaces:/interfaces:ro
+      - ./source/entities:/entities:ro
+      - ./source/adapters:/adapters:ro
+      - ./source/services/traefik/app:/app:ro
+      - ./source/services/traefik/config:/config:rw
+      - fs:/certs
+      - fs:/markers
+      - fs:/secrets
+      - fs:/tmp
     networks:
-      - net_public
       - net_private
+      - net_public
     ports:
-      - "80:80"
-      - "443:443"
+      - "8080:8080"
+      - "8443:8443"
     labels:
       - "traefik.enable=true"
       - "traefik.http.routers.traefik.rule=Host(`traefik.terminal.speculorg.localhost`)"
       - "traefik.http.routers.traefik.entrypoints=websecure"
       - "traefik.http.routers.traefik.service=api@internal"
       - "traefik.http.routers.traefik.tls=true"
-    volumes:
-      - certs:/certs:ro
-      - runtime:/run/terminal:rw
-      - ./source/services/traefik/config:/etc/traefik:ro
-      - ./source/services/consul/secrets:/consul/secrets:ro
-      - ./source/core:/core:ro
-      - ./source/services/traefik/app:/app:ro
-    depends_on:
-      consul:
-        condition: service_healthy
-      vault:
-        condition: service_healthy
     restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "python3", "/core/runtime/health_check.py"]
-      interval: 55s
-      timeout: 15s
-      retries: 3
-      start_period: 55s
