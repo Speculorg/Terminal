@@ -10,15 +10,29 @@ from core.logging import LogContext
 
 _WARN_FLOOD_WINDOW_SEC = 60
 
+_LEVEL_ORDER = {
+    LogLevelEnum.DEBUG.value: 10,
+    LogLevelEnum.INFO.value: 20,
+    LogLevelEnum.WARN.value: 30,
+    LogLevelEnum.ERROR.value: 40,
+}
+
 class JsonLogger(ILogger):
     def __init__(self, cfg: IConfigs) -> None:
         self._cfg = cfg
         self._lock = threading.Lock()
         self._last_warn: Dict[Tuple[str, Optional[str], Optional[str]], float] = {}
+        # Порог уровня из конфига (по умолчанию INFO)
+        level = str(getattr(cfg.logging, "level", "INFO")).upper()
+        self._threshold = _LEVEL_ORDER.get(level, _LEVEL_ORDER[LogLevelEnum.INFO.value])
 
     def log(self, level: LogLevelEnum, message: str, *, svc: Optional[str] = None,
             state: Optional[str] = None, event: Optional[str] = None,
             details: Optional[Mapping[str, Any]] = None) -> None:
+        # Фильтрация по уровню
+        if _LEVEL_ORDER.get(level.value, 0) < self._threshold:
+            return
+
         ctx = LogContext.build(self._cfg, state=state)
         record = {
             "timestamp": _utc_rfc3339(),
