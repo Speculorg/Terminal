@@ -8,10 +8,12 @@ from adapters.metrics import PrometheusMetrics
 from core.net import Net
 from core.fs import FS
 from core.markers import Markers
+from core.policies import MarkerPolicy
 
 # KV (Этап 7)
 from adapters.kv import ConsulKV
 from core.kv import KV
+from core.fsm import FSM
 
 class BaseService(IService):
     """Единый каркас сервиса.
@@ -33,6 +35,7 @@ class BaseService(IService):
         # KV
         ikv = ConsulKV(self._cfg)
         self._kv = KV(ikv, svc=self._cfg.context.name)
+        self._fsm = FSM(self._cfg.context.name, self._cfg, self._logger, self._markers, self._kv, self._metrics)
 
         # Внутренние флаги
         self._started: bool = False
@@ -54,6 +57,13 @@ class BaseService(IService):
 
     def start(self) -> None:
         self._logger.info("start", svc=self.svc)
+                # Определение режима запуска по обязательным маркерам профиля
+        required = set()
+        if hasattr(self, "run_profile") and hasattr(self.run_profile, "required_markers"):
+            required = set(self.run_profile.required_markers)
+        mode = MarkerPolicy.detect_run_mode(required, self._markers)
+        self._fsm.set_run_mode(mode)
+        self._fsm.start()
         self._started = True
 
     def pause(self) -> None:
