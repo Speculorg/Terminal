@@ -8,47 +8,38 @@ from adapters.metrics import PrometheusMetrics
 from core.net import Net
 from core.fs import FS
 from core.markers import Markers
-from core.policies import PoliciesFactory
-from core.policies import MarkerPolicy
-
-# KV (Этап 7)
-from adapters.kv import ConsulKV
 from core.kv import KV
+from adapters.kv import ConsulKV
 from core.fsm import FSM
+from core.policies import MarkerPolicy
+from core.registrar import Registrar
+from adapters.registrar import ConsulRegistrar
 
 class BaseService(IService):
-    """Единый каркас сервиса.
-    Инкапсулирует composition root и простейший жизненный цикл.
-    Без сетевых проб на ранних стадиях. Гейты по файловым маркерам реализуются в реализациях сервисов.
-    """
+    """Каркас сервиса. Инкапсулирует composition root и ЖЦ."""
     def __init__(self) -> None:
-        # Конфиги
+        # Composition root
         self._cfg = Configs()
-        # Логер
         self._logger = JsonLogger(self._cfg)
-        # Метрики
         self._metrics = PrometheusMetrics(self._cfg)
-        # Сеть
-        self._net = Net()
-        # Файловая система и маркеры
+        self._net = Net(self._cfg)
         self._fs = FS(self._cfg)
-        self._markers = Markers(self._cfg, fs=self._fs)
-        # KV
-        ikv = ConsulKV(self._cfg)
-        self._kv = KV(ikv, svc=self._cfg.context.name)
-        self._fsm = FSM(self._cfg.context.name, self._cfg, self._logger, self._markers, self._kv, self._metrics)
-
+        self._markers = Markers(self._cfg)
+        self._kv = KV(self._cfg, ConsulKV(self._cfg, self._logger))
+        self._registrar = Registrar(self._cfg, self._logger, ConsulRegistrar(self._cfg, self._logger))
+        # FSM
+        self._fsm = FSM(self.svc, self._cfg, self._logger, self._markers, self._kv, self._metrics, registrar=self._registrar)
         # Внутренние флаги
         self._started: bool = False
 
     # ---- IService ----
     def initialize(self) -> None:
         self._logger.info("initialize", svc=self.svc)
-        # Инициализация HTTP-экспортера метрик по настройке
+        # HTTP-экспорт метрик (если включён)
         enable_http = bool(getattr(self._cfg.metrics, "export_http", False))
         if enable_http:
             host = getattr(self._cfg.metrics, "host", "0.0.0.0")
-            port = int(getattr(self._cfg.metrics, "port", 9000))
+            port = int(getattr(self._cfg.metrics, "port", 8000))
             path = getattr(self._cfg.metrics, "path", "/metrics")
             try:
                 self._metrics.start_http_exporter(host=host, port=port, path=path)
@@ -58,7 +49,7 @@ class BaseService(IService):
 
     def start(self) -> None:
         self._logger.info("start", svc=self.svc)
-                # Определение режима запуска по обязательным маркерам профиля
+        # Определение режима запуска по обязательным маркерам профиля
         required = set()
         if hasattr(self, "run_profile") and hasattr(self.run_profile, "required_markers"):
             required = set(self.run_profile.required_markers)
@@ -76,18 +67,17 @@ class BaseService(IService):
     def restart(self) -> None:
         self._logger.info("restart", svc=self.svc)
         self.stop()
-        self.initialize()
         self.start()
 
     def stop(self) -> None:
         self._logger.info("stop", svc=self.svc)
         try:
-            self._metrics.stop_http_exporter()
+            self._registrar.deregister(self.svc)
         except Exception:
             pass
         self._started = False
 
-    # ---- Шорткаты ----
+    # ---- deps accessors ----
     @property
     def cfg(self) -> Configs: return self._cfg
     @property
@@ -102,6 +92,8 @@ class BaseService(IService):
     def markers(self) -> Markers: return self._markers
     @property
     def kv(self) -> KV: return self._kv
+    @property
+    def registrar(self) -> Registrar: return self._registrar
 
     @property
     def svc(self) -> str: return self._cfg.context.name

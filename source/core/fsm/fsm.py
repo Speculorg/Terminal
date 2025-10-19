@@ -17,7 +17,8 @@ class StateCtx:
     last_error: Optional[ErrorCodeEnum] = None
 
 class FSM:
-    def __init__(self, svc: str, cfg, logger, markers, kv, metrics):
+    def __init__(self, svc: str, cfg, logger, markers, kv, metrics, registrar=None):
+        self.registrar = registrar
         self.svc = svc
         self.cfg = cfg
         self.logger = logger
@@ -79,7 +80,7 @@ class FSM:
     def _policies(self):
         # лениво импортируем фабрику, чтобы избежать циклов импортов
         from core.policies import PoliciesFactory
-        return PoliciesFactory(self.cfg)
+        return PoliciesFactory(self.cfg, self.logger, self.registrar, self.kv, self.metrics, self.markers)
 
     def _on_enter(self, st: StateEnum) -> None:
         # Update ctx
@@ -121,6 +122,11 @@ class FSM:
 
     def _tick(self) -> None:
         st = self._policies().fsm.on_tick()
+        # Heartbeat в RUNNING
+        if self.ctx.current.name == 'RUNNING' and self.registrar is not None:
+            if self._policies().registrar.try_heartbeat(self.svc):
+                self.ctx.heartbeat_ts = int(time.time())
+                self._publish_state()
         self._transition(st)
 
     def _publish_state(self) -> None:
