@@ -17,79 +17,120 @@ class StateCtx:
     last_error: Optional[ErrorCodeEnum] = None
 
 class FSM:
-    def __init__(self, svc: str, cfg, logger, markers, kv, metrics) -> None:
+    def __init__(self, svc: str, cfg, logger, markers, kv, metrics):
         self.svc = svc
         self.cfg = cfg
         self.logger = logger
         self.markers = markers
         self.kv = kv
         self.metrics = metrics
+        self._run_mode: Optional[RunModeEnum] = None
         now = int(time.time())
         self.ctx = StateCtx(current=StateEnum.STARTING, previous=None, since_ts=now)
-        self.run_mode: RunModeEnum = RunModeEnum.NORMAL
-        self._last_publish_ts: int = 0  # rate-limit публикаций
 
+    # external API
     def set_run_mode(self, mode: RunModeEnum) -> None:
-        self.run_mode = mode
+        self._run_mode = mode
 
+    # Lifecycle
     def start(self) -> None:
-        self._enter(StateEnum.STARTING)
-        self._enter(StateEnum.BOOTSTRAPPING)
-        if self.run_mode in (RunModeEnum.FIRST, RunModeEnum.RECOVERY):
-            self._enter(StateEnum.INITIALIZING)
-        self._enter(StateEnum.SECURING)
-        self._enter(StateEnum.TLS_TRANSITION)
-        self._enter(StateEnum.REGISTERING)
-        self._enter(StateEnum.RUNNING)
+        # STARTING
+        self._on_enter(StateEnum.STARTING)
+        # prerequisites
+        if not self._policies().fsm.check_prereq():
+            self._to_error(ErrorCodeEnum.ERR_PRECONDITION); return
+        self._transition(StateEnum.BOOTSTRAPPING)
 
-    def stop(self) -> None:
-        self._enter(StateEnum.STOPPING)
-        self._enter(StateEnum.STOPPED)
+        # BOOTSTRAPPING
+        if self._run_mode == RunModeEnum.FIRST:
+            self._transition(self._policies().fsm.first_run())
+        elif self._run_mode == RunModeEnum.RECOVERY:
+            self._transition(self._policies().fsm.recovery_run())
+        else:
+            self._transition(self._policies().fsm.normal_run())
 
-    # --- internal ---
-    def _enter(self, new_state: StateEnum) -> None:
-        now = int(time.time())
-        prev = self.ctx.current
-        self.ctx.previous = prev
-        self.ctx.current = new_state
-        self.ctx.since_ts = now
-        # лог
-        self.logger.info("state.enter", svc=self.svc, state=new_state.name)
-        # метрики
-        try:
-            self.metrics.counter("terminal_fsm_counter").inc({"svc": self.svc, "state": new_state.name, "op": "enter", "result": "ok"})
-        except Exception:
-            pass
-        # health snapshot (in-memory)
-        self._publish_state_snapshot(new_state, now)
-        # запись в KV допускается только в RUNNING
-        if new_state is StateEnum.RUNNING:
-            self._publish_kv_state(now)
+        # INITIALIZING (optional)
+        if self.ctx.current is StateEnum.INITIALIZING:
+            self._transition(self._policies().fsm.bootstrap_gate())
 
-    def _health_status_for(self, st: StateEnum) -> HealthStatusEnum:
-        if st is StateEnum.RUNNING:
-            return HealthStatusEnum.PASSING
-        if st in (StateEnum.PAUSED,):
-            return HealthStatusEnum.MAINTENANCE
-        if st in (StateEnum.ERROR, StateEnum.STOPPING, StateEnum.STOPPED):
-            return HealthStatusEnum.CRITICAL
-        return HealthStatusEnum.WARNING
-
-    def _publish_state_snapshot(self, st: StateEnum, now: int) -> None:
-        try:
-            self.metrics.gauge("terminal_fsm_gauge").set({"svc": self.svc, "state": st.name, "op": "snapshot", "result": "ok"}, 1)
-        except Exception:
-            pass
-
-    def _publish_kv_state(self, now: int) -> None:
-        # rate-limit публикаций
-        min_interval = int(getattr(self.cfg.fsm, "state_publish_min_interval_ms", 5000)) // 1000
-        if now - self._last_publish_ts < max(1, min_interval):
+        # SECURING
+        if not self._policies().tls.check_ready():
+            self._transition(StateEnum.DEGRADED)
             return
-        self._last_publish_ts = now
+        self._transition(StateEnum.TLS_TRANSITION)
+
+        # TLS_TRANSITION
+        if not self._policies().tls.https_probes_ok():
+            self._transition(StateEnum.DEGRADED)
+            return
+        self._transition(self._policies().fsm.switch_https())
+
+        # REGISTERING
+        if not self._policies().registrar.on_register():
+            self._transition(StateEnum.DEGRADED)
+            return
+        self._transition(self._policies().fsm.on_register_ok())
+
+        # RUNNING single tick (TERM-1 minimal)
+        self._tick()
+        # остаёмся в RUNNING, дальнейшая оркестрация будет расширена на следующих этапах
+
+    # helpers
+    def _policies(self):
+        # лениво импортируем фабрику, чтобы избежать циклов импортов
+        from core.policies import PoliciesFactory
+        return PoliciesFactory(self.cfg)
+
+    def _on_enter(self, st: StateEnum) -> None:
+        # Update ctx
+        now = int(time.time())
+        prev = self.ctx.current if hasattr(self, "ctx") and self.ctx else None
+        self.ctx = StateCtx(current=st, previous=prev, since_ts=now, heartbeat_ts=self.ctx.heartbeat_ts if prev else None)
+        # Logging
+        self.logger.info({
+            "svc": self.svc,
+            "state": st.name,
+            "message": f"enter {st.name}",
+            "deadline_ms": self._state_deadline_ms(st),
+        })
+        # Metrics
+        self.metrics.gauge("terminal_fsm_gauge").set({"svc": self.svc, "state": st.name, "op": "snapshot", "result": "ok"}, 1)
+        # Publish
+        self._publish_state()
+
+    def _transition(self, to_state: StateEnum) -> None:
+        if self.ctx.current is to_state:
+            return
+        old = self.ctx.current
+        self._on_exit(old)
+        self._on_enter(to_state)
+        self._state_changed(old, to_state, reason="policy")
+
+    def _on_exit(self, st: StateEnum) -> None:
+        self.logger.debug({
+            "svc": self.svc,
+            "state": st.name,
+            "message": f"exit {st.name}",
+        })
+
+    def _state_changed(self, old: StateEnum, new: StateEnum, reason: str) -> None:
+        self.logger.info({
+            "svc": self.svc, "state": new.name, "event": "state_changed",
+            "details": {"from": old.name, "to": new.name, "reason": reason}
+        })
+
+    def _tick(self) -> None:
+        st = self._policies().fsm.on_tick()
+        self._transition(st)
+
+    def _publish_state(self) -> None:
+        # only RUNNING goes to KV according to plan
+        if self.ctx.current is not StateEnum.RUNNING:
+            return
+        now = int(time.time())
         payload = {
             "svc": self.svc,
-            "version": self.cfg.global.version,
+            "version": self.cfg.global_.version,
             "state": self.ctx.current.name,
             "status": self._health_status_for(self.ctx.current).name,
             "ts": now,
@@ -100,7 +141,32 @@ class FSM:
         }
         idx, _ = self.kv.states.read()
         ok = self.kv.states.cas(payload, idx)
-        try:
-            self.metrics.counter("terminal_kv_counter").inc({"svc": self.svc, "op": "cas", "result": "done" if ok else "collision"})
-        except Exception:
-            pass
+        self.metrics.counter("terminal_kv_counter").inc({"svc": self.svc, "op": "cas", "result": "done" if ok else "collision"})
+
+    def _health_status_for(self, state: StateEnum) -> HealthStatusEnum:
+        # Map by plan
+        if state is StateEnum.RUNNING:
+            return HealthStatusEnum.PASSING
+        if state in (StateEnum.PAUSED,):
+            return HealthStatusEnum.MAINTENANCE
+        if state in (StateEnum.ERROR, StateEnum.STOPPING, StateEnum.STOPPED):
+            return HealthStatusEnum.CRITICAL
+        # default early states and degraded
+        return HealthStatusEnum.WARNING
+
+    def _state_deadline_ms(self, state: StateEnum) -> int:
+        fsm = self.cfg.fsm
+        mapping = {
+            StateEnum.STARTING: fsm.state_starting_timeout_ms,
+            StateEnum.BOOTSTRAPPING: fsm.state_bootstrapping_timeout_ms,
+            StateEnum.INITIALIZING: fsm.state_initializing_timeout_ms,
+            StateEnum.SECURING: fsm.state_securing_timeout_ms,
+            StateEnum.TLS_TRANSITION: fsm.state_tls_transition_timeout_ms,
+            StateEnum.REGISTERING: fsm.state_registering_timeout_ms,
+            StateEnum.RUNNING: fsm.state_running_tick_timeout_ms,
+        }
+        return mapping.get(state, fsm.state_starting_timeout_ms)
+
+    def _to_error(self, code: ErrorCodeEnum) -> None:
+        self.ctx.last_error = code
+        self._transition(StateEnum.ERROR)

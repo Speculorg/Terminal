@@ -8,6 +8,7 @@ from adapters.metrics import PrometheusMetrics
 from core.net import Net
 from core.fs import FS
 from core.markers import Markers
+from core.policies import PoliciesFactory
 from core.policies import MarkerPolicy
 
 # KV (Этап 7)
