@@ -16,47 +16,44 @@ from core.registrar import Registrar
 from adapters.registrar import ConsulRegistrar
 
 class BaseService(IService):
-    """Каркас сервиса. Инкапсулирует composition root и ЖЦ."""
+    """Каркас сервиса. Собирает зависимости и поднимает инфраструктуру.
+
+    Без сетевых проб на ранних стадиях. Дедлайны берутся из cfg.fsm.*.
+
+    """
     def __init__(self) -> None:
-        # Composition root
         self._cfg = Configs()
         self._logger = JsonLogger(self._cfg)
-        self._metrics = PrometheusMetrics(self._cfg)
-        self._net = Net(self._cfg)
+        self._metrics = PrometheusMetrics()
+        # HTTP-экспорт метрик
+        try:
+            self._metrics.start_http_exporter(host="0.0.0.0", port=int(self._cfg.metrics.port), path=str(self._cfg.metrics.path))
+            self._logger.info("metrics http exporter started", svc=self.svc, port=int(self._cfg.metrics.port), path=str(self._cfg.metrics.path))
+        except Exception as e:
+            self._logger.warn("metrics http exporter failed", svc=self.svc, error=str(e))
+
+        self._net = Net(self._cfg)            # Net(cfg)
         self._fs = FS(self._cfg)
-        self._markers = Markers(self._cfg)
-        self._kv = KV(self._cfg, ConsulKV(self._cfg, self._logger))
-        self._registrar = Registrar(self._cfg, self._logger, ConsulRegistrar(self._cfg, self._logger))
-        # FSM
-        self._fsm = FSM(self.svc, self._cfg, self._logger, self._markers, self._kv, self._metrics, registrar=self._registrar)
-        # Внутренние флаги
-        self._started: bool = False
+        self._markers = Markers(self._cfg, fs=self._fs)
+        # Адаптеры
+        self._kv_client = ConsulKV(self._cfg)
+        self._registrar_client = ConsulRegistrar(self._cfg)
+        # Порты
+        self._kv = KV(self._kv_client, svc=self._cfg.context.name)
+        self._registrar = Registrar(cfg=self._cfg, logger=self._logger, client=self._registrar_client)
+        # FSM (пока тонкая обвязка)
+        self._fsm: Optional[FSM] = None
+        self.run_profile = None  # переопределяется в сервисе
 
     # ---- IService ----
     def initialize(self) -> None:
+        # На старте только подготовка локальных зависимостей. Без сетевых проверок.
         self._logger.info("initialize", svc=self.svc)
-        # HTTP-экспорт метрик (если включён)
-        enable_http = bool(getattr(self._cfg.metrics, "export_http", False))
-        if enable_http:
-            host = getattr(self._cfg.metrics, "host", "0.0.0.0")
-            port = int(getattr(self._cfg.metrics, "port", 8000))
-            path = getattr(self._cfg.metrics, "path", "/metrics")
-            try:
-                self._metrics.start_http_exporter(host=host, port=port, path=path)
-                self._logger.info("metrics http exporter started", svc=self.svc, host=host, port=port, path=path)
-            except Exception as e:
-                self._logger.warn("metrics http exporter failed", svc=self.svc, error=str(e))
 
     def start(self) -> None:
         self._logger.info("start", svc=self.svc)
-        # Определение режима запуска по обязательным маркерам профиля
-        required = set()
-        if hasattr(self, "run_profile") and hasattr(self.run_profile, "required_markers"):
-            required = set(self.run_profile.required_markers)
-        mode = MarkerPolicy.detect_run_mode(required, self._markers)
-        self._fsm.set_run_mode(mode)
-        self._fsm.start()
-        self._started = True
+        # Здесь позже будет запуск FSM и регистрация. Пока только лог.
+        return
 
     def pause(self) -> None:
         self._logger.info("pause", svc=self.svc)
@@ -66,18 +63,11 @@ class BaseService(IService):
 
     def restart(self) -> None:
         self._logger.info("restart", svc=self.svc)
-        self.stop()
-        self.start()
 
     def stop(self) -> None:
         self._logger.info("stop", svc=self.svc)
-        try:
-            self._registrar.deregister(self.svc)
-        except Exception:
-            pass
-        self._started = False
 
-    # ---- deps accessors ----
+    # ---- Properties ----
     @property
     def cfg(self) -> Configs: return self._cfg
     @property

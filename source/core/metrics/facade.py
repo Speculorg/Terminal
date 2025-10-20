@@ -1,7 +1,8 @@
 from __future__ import annotations
-import threading
 from typing import Dict, Tuple, Any, Optional, List, Mapping
 from .names import ALLOWED_LABEL_KEYS, DEFAULT_BUCKETS_MS, CARDINALITY_LIMIT
+
+LabelMap = Mapping[str, str]
 
 def _escape(s: str) -> str:
     return s.replace('\\', r'\\').replace('\n', r'\n').replace('"', r'\"')
@@ -10,108 +11,100 @@ class _Counter:
     def __init__(self, name: str) -> None:
         self._name = name
         self._values: Dict[Tuple[Tuple[str,str], ...], float] = {}
+
     def inc(self, labels: Mapping[str,str], v: float = 1.0) -> None:
         key = tuple(sorted(labels.items()))
         self._values[key] = self._values.get(key, 0.0) + v
+
     def export(self) -> List[str]:
-        lines = [f'# TYPE {self._name} counter']
+        out = [f"# TYPE {self._name} counter"]
         for labels, v in self._values.items():
-            lbl = ",".join(f'{k}="{_escape(str(val))}"' for k, val in labels)
-            lines.append(f'{self._name}{{{lbl}}} {v}')
-        return lines
+            lbl = ",".join([f'{k}="{_escape(val)}"' for k, val in labels])
+            out.append(f"{self._name}{{{lbl}}} {v}")
+        return out
 
 class _Gauge:
     def __init__(self, name: str) -> None:
         self._name = name
         self._values: Dict[Tuple[Tuple[str,str], ...], float] = {}
+
     def set(self, labels: Mapping[str,str], v: float) -> None:
         key = tuple(sorted(labels.items()))
-        self._values[key] = v
+        self._values[key] = float(v)
+
     def export(self) -> List[str]:
-        lines = [f'# TYPE {self._name} gauge']
+        out = [f"# TYPE {self._name} gauge"]
         for labels, v in self._values.items():
-            lbl = ",".join(f'{k}="{_escape(str(val))}"' for k, val in labels)
-            lines.append(f'{self._name}{{{lbl}}} {v}')
-        return lines
+            lbl = ",".join([f'{k}="{_escape(val)}"' for k, val in labels])
+            out.append(f"{self._name}{{{lbl}}} {v}")
+        return out
 
 class _Histogram:
-    def __init__(self, name: str, buckets_ms: List[int]) -> None:
+    def __init__(self, name: str, buckets: List[int]) -> None:
         self._name = name
-        self._b = sorted(buckets_ms)
-        self._counts: Dict[Tuple[Tuple[str,str], ...], List[int]] = {}
-        self._sums: Dict[Tuple[Tuple[str,str], ...], float] = {}
-    def observe(self, labels: Mapping[str,str], value_ms: float) -> None:
+        self._buckets = list(buckets)
+        self._values: Dict[Tuple[Tuple[str,str], ...], List[float]] = {}
+
+    def observe(self, labels: Mapping[str,str], v_ms: float) -> None:
         key = tuple(sorted(labels.items()))
-        if key not in self._counts:
-            self._counts[key] = [0]*(len(self._b)+1)  # +Inf bucket
-            self._sums[key] = 0.0
-        # find bucket
-        idx = len(self._b)
-        for i, le in enumerate(self._b):
-            if value_ms <= le:
-                idx = i
-                break
-        self._counts[key][idx] += 1
-        self._sums[key] += value_ms
+        self._values.setdefault(key, []).append(float(v_ms))
+
     def export(self) -> List[str]:
-        lines = [f'# TYPE {self._name} histogram']
-        for labels, counts in self._counts.items():
-            base = ",".join(f'{k}="{_escape(str(val))}"' for k, val in labels)
-            cumsum = 0
-            for i, le in enumerate(self._b):
-                cumsum += counts[i]
-                lines.append(f'{self._name}_bucket{{{base},le="{le}"}} {cumsum}')
-            cumsum += counts[-1]
-            lines.append(f'{self._name}_bucket{{{base},le="+Inf"}} {cumsum}')
-            lines.append(f'{self._name}_sum{{{base}}} {self._sums[labels]}')
-            lines.append(f'{self._name}_count{{{base}}} {cumsum}')
-        return lines
+        out: List[str] = []
+        for labels, values in self._values.items():
+            counts = []
+            for b in self._buckets:
+                counts.append(sum(1 for v in values if v <= b))
+            # buckets
+            for b, c in zip(self._buckets, counts):
+                lbl = ",".join([f'{k}="{_escape(val)}"' for k, val in labels] + [f'le="{b}"'])
+                out.append(f"{self._name}_bucket{{{lbl}}} {c}")
+            # +Inf
+            lbl_inf = ",".join([f'{k}="{_escape(val)}"' for k, val in labels] + ['le="+Inf"'])
+            out.append(f"{self._name}_bucket{{{lbl_inf}}} {len(values)}")
+            # sum and count
+            lbl_base = ",".join([f'{k}="{_escape(val)}"' for k, val in labels])
+            out.append(f"{self._name}_sum{{{lbl_base}}} {sum(values)}")
+            out.append(f"{self._name}_count{{{lbl_base}}} {len(values)}")
+        return out
 
 class Metrics:
-    """Простой реестр метрик + экспорт в формате Prometheus."""
+    """Встроенный реестр метрик. Без внешних зависимостей."""
     def __init__(self) -> None:
-        self._lock = threading.Lock()
-        self._common_labels: Dict[str,str] = {}
-        self._counters: Dict[str,_Counter] = {}
-        self._gauges: Dict[str,_Gauge] = {}
-        self._histograms: Dict[str,_Histogram] = {}
+        self._counters: Dict[str, _Counter] = {}
+        self._gauges: Dict[str, _Gauge] = {}
+        self._histograms: Dict[str, _Histogram] = {}
+        # Ограничение кардинальности обеспечивается на уровне клиентов (см. adapters)
 
-    # API
-    def set_common_labels(self, labels: Mapping[str,str]) -> None:
-        with self._lock:
-            self._common_labels = {k: str(v) for k, v in labels.items() if k in ALLOWED_LABEL_KEYS}
+    # User API
+    def inc_counter(self, name: str, labels: LabelMap) -> None:
+        self._validate_labels(labels)
+        self._get_counter(name).inc(labels)
 
-    def inc_counter(self, name: str, labels: Mapping[str,str]) -> None:
-        with self._lock:
-            lbl = self._merge_labels(labels)
-            self._get_counter(name).inc(lbl, 1.0)
+    def set_gauge(self, name: str, value: float, labels: LabelMap) -> None:
+        self._validate_labels(labels)
+        self._get_gauge(name).set(labels, value)
 
-    def set_gauge(self, name: str, value: float, labels: Mapping[str,str]) -> None:
-        with self._lock:
-            lbl = self._merge_labels(labels)
-            self._get_gauge(name).set(lbl, float(value))
+    def observe_histogram(self, name: str, value_ms: float, labels: LabelMap) -> None:
+        self._validate_labels(labels)
+        self._get_histogram(name).observe(labels, value_ms)
 
-    def observe_histogram(self, name: str, value_ms: float, labels: Mapping[str,str]) -> None:
-        with self._lock:
-            lbl = self._merge_labels(labels)
-            self._get_histogram(name).observe(lbl, float(value_ms))
-
+    # Export
     def export_prometheus(self) -> str:
         lines: List[str] = []
-        with self._lock:
-            for d in (self._counters, self._gauges, self._histograms):
-                for obj in d.values():
-                    lines.extend(obj.export())
+        for c in self._counters.values():
+            lines.extend(c.export())
+        for g in self._gauges.values():
+            lines.extend(g.export())
+        for h in self._histograms.values():
+            lines.extend(h.export())
         return "\n".join(lines) + "\n"
 
-    # internals
-    def _merge_labels(self, labels: Mapping[str,str]) -> Dict[str,str]:
-        merged = dict(self._common_labels)
-        for k, v in labels.items():
-            if k in ALLOWED_LABEL_KEYS:
-                merged[k] = str(v)
-        # кардинальность контролируется на уровне вызывающего кода в ядре
-        return merged
+    # Internals
+    def _validate_labels(self, labels: LabelMap) -> None:
+        for k in labels.keys():
+            if k not in ALLOWED_LABEL_KEYS:
+                raise ValueError(f"label '{k}' is not allowed")
 
     def _get_counter(self, name: str) -> _Counter:
         if name not in self._counters:
