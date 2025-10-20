@@ -4,8 +4,8 @@ from typing import List, Optional
 
 @dataclass(frozen=True)
 class GlobalSection:
-    domain_root: str = "localdomain"
-    version: str = "0.0.0"
+    domain_root: str = "terminal.local"
+    version: str = "0.0.0-dev"
 
 @dataclass(frozen=True)
 class ContextSection:
@@ -19,14 +19,15 @@ class ConsulSection:
     host: str = "consul"
     http_port: int = 8500
     https_port: int = 8501
-    scheme: str = "http"
 
 @dataclass(frozen=True)
 class VaultSection:
     host: str = "vault"
     http_port: int = 8200
-    https_port: int = 8201
-    scheme: str = "http"
+    https_port: int = 8200
+    pki_root_path: str = "pki-root"
+    pki_int_path: str = "pki-int"
+    pki_role: str = "terminal-leaf"
 
 @dataclass(frozen=True)
 class TraefikSection:
@@ -36,11 +37,14 @@ class TraefikSection:
 @dataclass(frozen=True)
 class LoggingSection:
     level: str = "INFO"
+    correlation_id_header: str = "X-Request-ID"
+    generate_correlation_if_missing: bool = True
+    correlation_id_len_max: int = 64
 
 @dataclass(frozen=True)
 class MetricsSection:
     path: str = "/metrics"
-    port: int = 9090
+    port: int = 8000
 
 @dataclass(frozen=True)
 class FSSection:
@@ -51,31 +55,44 @@ class FSSection:
 
 @dataclass(frozen=True)
 class TLSSection:
-    cert_name: str = "traefik"
-    cert_path: str = "/app/fs/certs/traefik.crt"
-    key_path: str = "/app/fs/certs/traefik.key"
-    chain_path: str = "/app/fs/certs/traefik.fullchain"
+    cert_name: str = "svc"
+    cert_path: str = "/app/fs/certs/cert.pem"
+    key_path: str = "/app/fs/certs/privkey.pem"
+    chain_path: str = "/app/fs/certs/fullchain.pem"
     ca_path: str = "/app/fs/certs/ca.crt"
-    certs_rotate_hours: int = 24
+    certs_rotate_hours: int = 168
+    reloader_strategy: str = "SSL_CTX"
+    watch_debounce_ms: int = 300
+    watch_poll_interval_ms: int = 500
 
 @dataclass(frozen=True)
 class KVSection:
-    request_timeout_ms: int = 2000
+    request_timeout_ms: int = 5000
+    cas_backoff_factor: int = 2
+    cas_max_retries: int = 5
 
 @dataclass(frozen=True)
 class FSMSection:
-    state_bootstrapping_timeout_ms: int = 15000
-    state_initializing_timeout_ms: int = 30000
-    state_securing_timeout_ms: int = 30000
-    state_tls_transition_timeout_ms: int = 30000
-    state_registering_timeout_ms: int = 15000
+    state_starting_timeout_ms: int = 10000
+    state_bootstrapping_timeout_ms: int = 5000
+    state_initializing_timeout_ms: int = 15000
+    state_securing_timeout_ms: int = 10000
+    state_tls_transition_timeout_ms: int = 5000
+    state_registering_timeout_ms: int = 5000
+    state_running_tick_timeout_ms: int = 5000
+    state_publish_min_interval_ms: int = 5000
+    degraded_recovery_window_ms: int = 60000
+    degraded_transition_window_ms: int = 30000
+    degraded_min_duration_ms: int = 5000
 
 @dataclass(frozen=True)
 class RegistrarSection:
-    enabled: bool = True
+    ttl_sec: int = 15
+    heartbeat_period_sec: int = 7
+    deregister_critical_service_after_sec: int = 45
 
 @dataclass(frozen=True)
-class ConfigModel:
+class Model:
     global_: GlobalSection = GlobalSection()
     context: ContextSection = ContextSection()
     consul: ConsulSection = ConsulSection()
