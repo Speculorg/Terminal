@@ -1,53 +1,86 @@
 from __future__ import annotations
 from dataclasses import dataclass
-from typing import Any
-import time
+from typing import Any, Dict
 
-from interfaces.i_configs import IConfigs
-from interfaces.i_logger import ILogger
+from interfaces import IConfigs, ILogger
+from entities import ErrorCodeEnum
 
 @dataclass
 class Registrar:
-    """Порт регистрации сервисов и TTL-heartbeat.
-    Работает поверх client-адаптера (Consul agent HTTP).
-    Интерфейс без deadline-параметров. Таймауты берутся из cfg.
+    """Порт регистрации сервиса в каталоге и TTL-heartbeat.
+    Работает поверх клиент-адаптера (Consul agent HTTP).
+    Без deadline-параметров. Все окна берутся политиками/FSM из cfg.fsm.*.
     """
     cfg: IConfigs
     logger: ILogger
-    client: Any  # duck-typed: register_service(dict), deregister_service(str), pass_ttl(str)
+    client: Any  # duck-typed: register_service(def)->bool, deregister_service(id)->bool, pass_ttl(check_id)->bool
 
+    # ---- публичный API порта ----
+    def register(self, svc: str) -> bool:
+        """Идемпотентная регистрация сервиса с TTL-check."""
+        service_def = self._service_def(svc)
+        try:
+            ok = self.client.register_service(service_def)
+            if not ok:
+                self.logger.warn("registrar.register.failed", svc=svc, error=ErrorCodeEnum.ERR_REGISTRY)
+            else:
+                self.logger.info("registrar.register.ok", svc=svc)
+            return ok
+        except Exception as e:
+            self.logger.warn("registrar.register.exception", svc=svc, error=ErrorCodeEnum.ERR_REGISTRY, details={"exc": type(e).__name__})
+            return False
+
+    def heartbeat(self, svc: str) -> bool:
+        """Продление TTL для зарегистрированного сервиса."""
+        check_id = self._ttl_check_id(svc)
+        try:
+            ok = self.client.pass_ttl(check_id)
+            if not ok:
+                self.logger.warn("registrar.heartbeat.failed", svc=svc, error=ErrorCodeEnum.ERR_REGISTRY)
+            else:
+                self.logger.info("registrar.heartbeat.ok", svc=svc)
+            return ok
+        except Exception as e:
+            self.logger.warn("registrar.heartbeat.exception", svc=svc, error=ErrorCodeEnum.ERR_REGISTRY, details={"exc": type(e).__name__})
+            return False
+
+    def deregister(self, svc: str) -> bool:
+        service_id = self._service_id(svc)
+        try:
+            ok = self.client.deregister_service(service_id)
+            if not ok:
+                self.logger.warn("registrar.deregister.failed", svc=svc, error=ErrorCodeEnum.ERR_REGISTRY)
+            else:
+                self.logger.info("registrar.deregister.ok", svc=svc)
+            return ok
+        except Exception as e:
+            self.logger.warn("registrar.deregister.exception", svc=svc, error=ErrorCodeEnum.ERR_REGISTRY, details={"exc": type(e).__name__})
+            return False
+
+    # ---- формирование service definition ----
     def _service_id(self, svc: str) -> str:
         return svc
 
-    def register(self, svc: str) -> bool:
-        svc_id = self._service_id(svc)
-        ttl_sec = int(self.cfg.registrar.ttl_sec)
-        hb_period = int(self.cfg.registrar.heartbeat_period_sec)
-        # TTL-check id по канону Consul: service:{id}
-        check_id = f"service:{svc_id}"
-        service_def = {
-            "ID": svc_id,
-            "Name": svc_id,
-            "Port": int(self.cfg.context.port),
-            "Tags": list(self.cfg.context.tags),
-            "Checks": [{
-                "CheckID": check_id,
-                "TTL": f"{ttl_sec}s",
-                "DeregisterCriticalServiceAfter": f"{int(self.cfg.registrar.deregister_critical_service_after_sec)}s"
-            }]
+    def _ttl_check_id(self, svc: str) -> str:
+        return f"service:{svc}:ttl"
+
+    def _service_def(self, svc: str) -> Dict[str, object]:
+        c = self.cfg
+        rs = c.registrar
+        cs = c.context
+        service = {
+            "ID": self._service_id(svc),
+            "Name": svc,
+            "Port": int(cs.port),
+            "Tags": list(cs.tags),
+            "EnableTagOverride": False,
+            "Checks": [
+                {
+                    "CheckID": self._ttl_check_id(svc),
+                    "Name": f"{svc} ttl",
+                    "TTL": f"{int(rs.ttl_sec)}s",
+                    "DeregisterCriticalServiceAfter": f"{int(rs.deregister_critical_service_after_sec)}s",
+                }
+            ],
         }
-        ok = self.client.register_service(service_def)
-        self.logger.info("registrar.register", svc=svc, ok=bool(ok))
-        return bool(ok)
-
-    def heartbeat(self, svc: str) -> bool:
-        check_id = f"service:{self._service_id(svc)}"
-        ok = self.client.pass_ttl(check_id)
-        self.logger.info("registrar.heartbeat", svc=svc, ok=bool(ok))
-        return bool(ok)
-
-    def deregister(self, svc: str) -> bool:
-        svc_id = self._service_id(svc)
-        ok = self.client.deregister_service(svc_id)
-        self.logger.info("registrar.deregister", svc=svc, ok=bool(ok))
-        return bool(ok)
+        return service

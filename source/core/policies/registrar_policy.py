@@ -1,11 +1,8 @@
 from __future__ import annotations
 from dataclasses import dataclass
-import time
 
-from interfaces.i_configs import IConfigs
-from interfaces.i_logger import ILogger
-from interfaces.i_registrar import IRegistrar
-from entities.error_code_enum import ErrorCodeEnum
+from interfaces import IConfigs, ILogger, IRegistrar
+from entities import ErrorCodeEnum
 
 @dataclass
 class RegistrarPolicy:
@@ -15,30 +12,30 @@ class RegistrarPolicy:
 
     def on_register(self, svc: str) -> bool:
         try:
-            if not self.registrar.register(svc):
+            ok = self.registrar.register(svc)
+            if not ok:
                 self.logger.warn("registrar.register.failed", svc=svc, error=ErrorCodeEnum.ERR_REGISTRY)
-                return False
-            return True
+            return ok
         except Exception as e:
             self.logger.warn("registrar.register.exception", svc=svc, error=ErrorCodeEnum.ERR_REGISTRY, details={"exc": type(e).__name__})
             return False
 
-    def try_heartbeat(self, svc: str) -> bool:
+    def on_heartbeat(self, svc: str) -> bool:
         try:
-            if not self.registrar.heartbeat(svc):
+            ok = self.registrar.heartbeat(svc)
+            if not ok:
                 self.logger.warn("registrar.heartbeat.failed", svc=svc, error=ErrorCodeEnum.ERR_REGISTRY)
-                return False
-            return True
+            return ok
         except Exception as e:
             self.logger.warn("registrar.heartbeat.exception", svc=svc, error=ErrorCodeEnum.ERR_REGISTRY, details={"exc": type(e).__name__})
             return False
 
     def on_deregister(self, svc: str) -> bool:
         try:
-            if not self.registrar.deregister(svc):
+            ok = self.registrar.deregister(svc)
+            if not ok:
                 self.logger.warn("registrar.deregister.failed", svc=svc, error=ErrorCodeEnum.ERR_REGISTRY)
-                return False
-            return True
+            return ok
         except Exception as e:
             self.logger.warn("registrar.deregister.exception", svc=svc, error=ErrorCodeEnum.ERR_REGISTRY, details={"exc": type(e).__name__})
             return False
