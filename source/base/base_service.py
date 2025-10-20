@@ -1,9 +1,9 @@
 from __future__ import annotations
 from typing import Optional
 
-from interfaces.i_service import IService
+from interfaces import IService
 from core.configs import Configs
-from adapters.logging.json_logger import JsonLogger
+from adapters.logging import JsonLogger
 from adapters.metrics import PrometheusMetrics
 from core.net import Net
 from core.fs import FS

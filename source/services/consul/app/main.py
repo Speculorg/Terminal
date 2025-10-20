@@ -10,7 +10,10 @@ class ConsulRunProfile(IRunProfile):
 class ConsulService(BaseService):
     def __init__(self) -> None:
         super().__init__()
-        self.run_profile = ConsulRunProfile(required_markers={'fs/markers/consul/bootstrap.done', 'fs/markers/consul/tokens.done'})
+        self.run_profile = ConsulRunProfile(required_markers={
+            'fs/markers/consul/bootstrap.done',
+            'fs/markers/consul/tokens.done',
+        })
 
 if __name__ == "__main__":
     svc = ConsulService()

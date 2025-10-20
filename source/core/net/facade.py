@@ -1,47 +1,39 @@
 from __future__ import annotations
 import socket, ssl, time, http.client, urllib.parse
 from typing import Tuple
-from interfaces import INet
-from base.exceptions import DeadlineRequiredError, OperationTimeoutError
 
-class Net(INet):
-    def __init__(self):
-        pass
+class Net:
+    def __init__(self, *, default_timeout_ms: int = 5000) -> None:
+        self._default_timeout = max(100, int(default_timeout_ms))
 
-    def _require_deadline(self, deadline_ms: int) -> float:
-        if deadline_ms is None:
-            raise DeadlineRequiredError("deadline_ms is required as a named argument")
-        return time.monotonic() + (deadline_ms / 1000.0)
-
-    # ---- INet ----
-    def build_url(self, scheme: str, host: str, port: int, path: str = "/", *, deadline_ms: int) -> str:
-        deadline_ts = self._require_deadline(deadline_ms)
+    # ---- API ----
+    def build_url(self, scheme: str, host: str, port: int, path: str = "/") -> str:
         path = path or "/"
         if not path.startswith("/"):
             path = "/" + path
-        netloc = f"{host}:{int(port)}"
-        return urllib.parse.urlunparse((scheme, netloc, path, "", "", ""))
+        return f"{scheme}://{host}:{port}{path}"
 
-    def fqdn(self, host: str, *, deadline_ms: int) -> str:
-        self._require_deadline(deadline_ms)
-        return socket.getfqdn(host)
+    def fqdn(self, host: str) -> str:
+        try:
+            return socket.getfqdn(host)
+        except Exception:
+            return host
 
-    def wait_port(self, host: str, port: int, *, deadline_ms: int) -> None:
-        deadline_ts = self._require_deadline(deadline_ms)
+    def wait_port(self, host: str, port: int) -> None:
+        end_ts = time.monotonic() + (self._default_timeout / 1000.0)
         last_err: Exception | None = None
-        while time.monotonic() < deadline_ts:
+        while time.monotonic() < end_ts:
             try:
-                with socket.create_connection((host, port), timeout=0.5):
+                with socket.create_connection((host, port), timeout=1.0):
                     return
             except Exception as e:
                 last_err = e
                 time.sleep(0.1)
-        raise OperationTimeoutError(f"wait_port timeout for {host}:{port}: {last_err}")
+        raise TimeoutError(f"wait_port timeout for {host}:{port}: {last_err}")
 
-    def probe_http(self, url: str, *, deadline_ms: int) -> Tuple[int, bytes]:
-        deadline_ts = self._require_deadline(deadline_ms)
+    def probe_http(self, url: str) -> Tuple[int, bytes]:
         parsed = urllib.parse.urlparse(url)
-        conn = http.client.HTTPConnection(parsed.hostname, parsed.port or 80, timeout=2.0)
+        conn = http.client.HTTPConnection(parsed.hostname, parsed.port or 80, timeout=self._default_timeout/1000.0)
         try:
             conn.request("GET", parsed.path or "/")
             resp = conn.getresponse()
@@ -50,11 +42,10 @@ class Net(INet):
         finally:
             conn.close()
 
-    def probe_https(self, url: str, *, deadline_ms: int) -> Tuple[int, bytes]:
-        deadline_ts = self._require_deadline(deadline_ms)
+    def probe_https(self, url: str) -> Tuple[int, bytes]:
         parsed = urllib.parse.urlparse(url)
         context = ssl.create_default_context()
-        conn = http.client.HTTPSConnection(parsed.hostname, parsed.port or 443, timeout=2.0, context=context)
+        conn = http.client.HTTPSConnection(parsed.hostname, parsed.port or 443, timeout=self._default_timeout/1000.0, context=context)
         try:
             conn.request("GET", parsed.path or "/")
             resp = conn.getresponse()

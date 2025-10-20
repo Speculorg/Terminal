@@ -10,7 +10,11 @@ class VaultRunProfile(IRunProfile):
 class VaultService(BaseService):
     def __init__(self) -> None:
         super().__init__()
-        self.run_profile = VaultRunProfile(required_markers={'fs/markers/vault/pki.done', 'fs/markers/vault/unseal.done', 'fs/markers/vault/init.done'})
+        self.run_profile = VaultRunProfile(required_markers={
+            'fs/markers/vault/init.done',
+            'fs/markers/vault/unseal.done',
+            'fs/markers/vault/pki.done',
+        })
 
 if __name__ == "__main__":
     svc = VaultService()
