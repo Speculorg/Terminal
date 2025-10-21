@@ -1,5 +1,6 @@
 from __future__ import annotations
 from dataclasses import dataclass
+from typing import Optional
 from interfaces import (
     IDeps, IConfigs, ILogger, IMetrics, INet, IFS, IMarker,
     IKV, IRegistrar, IFSM, ITLSReloader, ITLSWatch, ITLSProbe
@@ -18,4 +19,4 @@ class BaseDeps(IDeps):
     tls_reloader: ITLSReloader
     tls_watch: ITLSWatch
     tls_probe: ITLSProbe
-    fsm: IFSM  # assigned by BaseService after construction
+    fsm: IFSM  # допускается тонкая обвязка-реализация IFSM на базе core.fsm.FSM
