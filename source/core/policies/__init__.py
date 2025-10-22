@@ -6,6 +6,8 @@ from .registrar_policy import RegistrarPolicy
 from .health_policy import HealthPolicy
 from .kv_policy import KVPolicy
 
+from .fs_policy import FSPolicy
+
 __all__ = [
     'PoliciesFactory',
     'MarkerPolicy',
@@ -14,4 +16,5 @@ __all__ = [
     'RegistrarPolicy',
     'HealthPolicy',
     'KVPolicy',
+    'FSPolicy',
 ]

@@ -117,7 +117,6 @@ services:
       - net_private
     ports:
       - "8200:8200"
-      - "8201:8201"
     labels:
       - "traefik.enable=true"
       - "traefik.http.routers.vault-ui.rule=Host(`vault.terminal.speculorg.localhost`)"

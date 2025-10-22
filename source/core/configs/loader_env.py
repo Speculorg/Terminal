@@ -78,7 +78,7 @@ def load_model() -> Tuple[Model, Dict[str, str]]:
     vault = VaultSection(
         host=merged.get("VAULT_HOST", "vault"),
         http_port=int(merged.get("VAULT_HTTP_PORT", "8200") or "8200"),
-        https_port=int(merged.get("VAULT_HTTPS_PORT", "8201") or "8201"),
+        https_port=int(merged.get("VAULT_HTTPS_PORT", "8200") or "8200"),
         pki_root_path=merged.get("VAULT_PKI_ROOT_PATH", "pki-root"),
         pki_int_path=merged.get("VAULT_PKI_INT_PATH", "pki-int"),
         pki_role=merged.get("VAULT_PKI_ROLE", "terminal-leaf"),
@@ -98,6 +98,7 @@ def load_model() -> Tuple[Model, Dict[str, str]]:
     )
 
     metrics = MetricsSection(
+        host=merged.get("METRICS_HOST", "0.0.0.0"),
         path=merged.get("METRICS_PATH", "/metrics"),
         port=int(merged.get("METRICS_PORT", "8000") or "8000"),
     )
@@ -127,7 +128,6 @@ def load_model() -> Tuple[Model, Dict[str, str]]:
         state_tls_transition_timeout_ms=int(merged.get("FSM_STATE_TLS_TRANSITION_TIMEOUT_MS", "5000") or "5000"),
         state_registering_timeout_ms=int(merged.get("FSM_STATE_REGISTERING_TIMEOUT_MS", "5000") or "5000"),
         state_running_tick_timeout_ms=int(merged.get("FSM_STATE_RUNNING_TICK_TIMEOUT_MS", "5000") or "5000"),
-        state_starting_timeout_ms=int(merged.get("FSM_STATE_STARTING_TIMEOUT_MS", "10000") or "10000"),
         state_publish_min_interval_ms=int(merged.get("FSM_STATE_PUBLISH_MIN_INTERVAL_MS", "5000") or "5000"),
         degraded_recovery_window_ms=int(merged.get("FSM_DEGRADED_RECOVERY_WINDOW_MS", "60000") or "60000"),
         degraded_transition_window_ms=int(merged.get("FSM_DEGRADED_TRANSITION_WINDOW_MS", "30000") or "30000"),

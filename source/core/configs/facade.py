@@ -1,61 +1,54 @@
 from __future__ import annotations
-import hashlib, json
-from typing import Any, Dict
+from dataclasses import replace
+from typing import Optional
 from .model import Model
 from .loader_env import load_model
+from .hasher import config_hash
 
 class Configs:
-    """
-    Типобезопасный фасад.
-    Автозагрузка: читаем configs.env, затем накладываем переменные окружения контейнера.
-    Доступ к секциям только атрибутами.
-    """
-    def __init__(self) -> None:
-        model, merged = load_model()
-        self._m: Model = model
-        self._hash: str = self._calc_hash(merged)
+    _instance: Optional["Configs"] = None
 
-    # секции
-    @property
-    def global_(self): return self._m.global_
-    @property
-    def context(self): return self._m.context
-    @property
-    def consul(self): return self._m.consul
-    @property
-    def vault(self): return self._m.vault
-    @property
-    def traefik(self): return self._m.traefik
-    @property
-    def logging(self): return self._m.logging
-    @property
-    def metrics(self): return self._m.metrics
-    @property
-    def fs(self): return self._m.fs
-    @property
-    def tls(self): return self._m.tls
-    @property
-    def kv(self): return self._m.kv
-    @property
-    def fsm(self): return self._m.fsm
-    @property
-    def registrar(self): return self._m.registrar
+    def __init__(self, model: Model):
+        self._model = model
+        self._hash = config_hash(model)
 
-    # удобные прокси
-    @property
-    def version(self) -> str: return self._m.global_.version
-    @property
-    def domain_root(self) -> str: return self._m.global_.domain_root
+    @classmethod
+    def load(cls, env_file_path: str | None = None) -> "Configs":
+        model = load_model(env_file_path)
+        inst = cls(model)
+        cls._instance = inst
+        return inst
 
     @property
-    def config_hash(self) -> str: return self._hash
+    def model(self) -> Model:
+        return self._model
 
-    # --- helpers ---
-    def _calc_hash(self, merged_env: Dict[str, Any]) -> str:
-        allow_prefixes = (
-            "GLOBAL_", "SERVICE_", "CONSUL_", "VAULT_", "TRAEFIK_",
-            "LOGGING_", "METRICS_", "FS_", "TLS_", "KV_", "FSM_", "REGISTRAR_", "CONFIGS_ENV_PATH"
-        )
-        filtered = {k: str(v) for k, v in merged_env.items() if any(k.startswith(p) for p in allow_prefixes)}
-        raw = json.dumps(filtered, sort_keys=True, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
-        return hashlib.sha256(raw).hexdigest()
+    @property
+    def hash(self) -> str:
+        return self._hash
+
+    # Проксируем секции как атрибуты фасада
+    @property
+    def global_(self): return self._model.global_
+    @property
+    def context(self): return self._model.context
+    @property
+    def consul(self): return self._model.consul
+    @property
+    def vault(self): return self._model.vault
+    @property
+    def traefik(self): return self._model.traefik
+    @property
+    def logging(self): return self._model.logging
+    @property
+    def metrics(self): return self._model.metrics
+    @property
+    def fs(self): return self._model.fs
+    @property
+    def tls(self): return self._model.tls
+    @property
+    def kv(self): return self._model.kv
+    @property
+    def fsm(self): return self._model.fsm
+    @property
+    def registrar(self): return self._model.registrar

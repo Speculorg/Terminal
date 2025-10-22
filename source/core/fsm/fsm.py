@@ -1,6 +1,6 @@
 from __future__ import annotations
 from dataclasses import dataclass
-from typing import Optional
+from typing import Optional, Set, Dict, List, Tuple
 import time
 
 from entities.state_enum import StateEnum
@@ -17,162 +17,185 @@ class StateCtx:
     last_error: Optional[ErrorCodeEnum] = None
 
 class FSM:
-    def __init__(self, svc: str, cfg, logger, markers, kv, metrics, registrar=None):
-        self.registrar = registrar
-        self.svc = svc
+    """FSM без сетевых проб на ранних стадиях.
+    Гейты по файловым маркерам (из профиля сервиса).
+    В REGISTERING выполняет регистрацию с ретраями.
+    В RUNNING держит heartbeat и публикует состояние в KV (CAS с ретраями).
+    """
+    def __init__(self, cfg, logger, markers, kv, metrics, registrar=None):
         self.cfg = cfg
         self.logger = logger
         self.markers = markers
         self.kv = kv
         self.metrics = metrics
-        self._run_mode: Optional[RunModeEnum] = None
+        self.registrar = registrar
+        self.ctx = StateCtx(current=StateEnum.STARTING, previous=None, since_ts=int(time.time()))
+        # Подставляются BaseService перед run()
+        self.required_markers: Set[str] = set()
+        self.stage_gates: Dict[StateEnum, List[Tuple[str,str]]] = {}
+        self.svc: Optional[str] = None
+        self.run_mode: Optional[RunModeEnum] = None
+        # publish throttling
+        self._last_publish_ts: int = 0
+
+    def on_enter(self, state: StateEnum) -> None:
         now = int(time.time())
-        self.ctx = StateCtx(current=StateEnum.STARTING, previous=None, since_ts=now)
+        self.ctx.previous = self.ctx.current
+        self.ctx.current = state
+        self.ctx.since_ts = now
+        self.logger.info("fsm.enter", svc=self.svc, state=state.name)
 
-    # external API
-    def set_run_mode(self, mode: RunModeEnum) -> None:
-        self._run_mode = mode
+    # ---------- KV state publish with CAS retries ----------
+    def _publish_state_once(self) -> bool:
+        try:
+            idx, _old = self.kv.states.read()
+        except Exception as e:
+            self.logger.warn("kv.states.read.error", svc=self.svc, err=type(e).__name__)
+            return False
 
-    # Lifecycle
-    def start(self) -> None:
-        # STARTING
-        self._on_enter(StateEnum.STARTING)
-        # prerequisites
-        if not self._policies().fsm.check_prereq():
-            self._to_error(ErrorCodeEnum.ERR_PRECONDITION); return
-        self._transition(StateEnum.BOOTSTRAPPING)
-
-        # BOOTSTRAPPING
-        if self._run_mode == RunModeEnum.FIRST:
-            self._transition(self._policies().fsm.first_run())
-        elif self._run_mode == RunModeEnum.RECOVERY:
-            self._transition(self._policies().fsm.recovery_run())
-        else:
-            self._transition(self._policies().fsm.normal_run())
-
-        # INITIALIZING (optional)
-        if self.ctx.current is StateEnum.INITIALIZING:
-            self._transition(self._policies().fsm.bootstrap_gate())
-
-        # SECURING
-        if not self._policies().tls.check_ready():
-            self._transition(StateEnum.DEGRADED)
-            return
-        self._transition(StateEnum.TLS_TRANSITION)
-
-        # TLS_TRANSITION
-        if not self._policies().tls.https_probes_ok():
-            self._transition(StateEnum.DEGRADED)
-            return
-        self._transition(self._policies().fsm.switch_https())
-
-        # REGISTERING
-        if not self._policies().registrar.on_register():
-            self._transition(StateEnum.DEGRADED)
-            return
-        self._transition(self._policies().fsm.on_register_ok())
-
-        # RUNNING single tick (TERM-1 minimal)
-        self._tick()
-        # остаёмся в RUNNING, дальнейшая оркестрация будет расширена на следующих этапах
-
-    # helpers
-    def _policies(self):
-        # лениво импортируем фабрику, чтобы избежать циклов импортов
-        from core.policies import PoliciesFactory
-        return PoliciesFactory(self.cfg, self.logger, self.registrar, self.kv, self.metrics, self.markers)
-
-    def _on_enter(self, st: StateEnum) -> None:
-        # Update ctx
-        now = int(time.time())
-        prev = self.ctx.current if hasattr(self, "ctx") and self.ctx else None
-        self.ctx = StateCtx(current=st, previous=prev, since_ts=now, heartbeat_ts=self.ctx.heartbeat_ts if prev else None)
-        # Logging
-        self.logger.info({
-            "svc": self.svc,
-            "state": st.name,
-            "message": f"enter {st.name}",
-            "deadline_ms": self._state_deadline_ms(st),
-        })
-        # Metrics
-        self.metrics.gauge("terminal_fsm_gauge").set({"svc": self.svc, "state": st.name, "op": "snapshot", "result": "ok"}, 1)
-        # Publish
-        self._publish_state()
-
-    def _transition(self, to_state: StateEnum) -> None:
-        if self.ctx.current is to_state:
-            return
-        old = self.ctx.current
-        self._on_exit(old)
-        self._on_enter(to_state)
-        self._state_changed(old, to_state, reason="policy")
-
-    def _on_exit(self, st: StateEnum) -> None:
-        self.logger.debug({
-            "svc": self.svc,
-            "state": st.name,
-            "message": f"exit {st.name}",
-        })
-
-    def _state_changed(self, old: StateEnum, new: StateEnum, reason: str) -> None:
-        self.logger.info({
-            "svc": self.svc, "state": new.name, "event": "state_changed",
-            "details": {"from": old.name, "to": new.name, "reason": reason}
-        })
-
-    def _tick(self) -> None:
-        st = self._policies().fsm.on_tick()
-        # Heartbeat в RUNNING
-        if self.ctx.current.name == 'RUNNING' and self.registrar is not None:
-            if self._policies().registrar.try_heartbeat(self.svc):
-                self.ctx.heartbeat_ts = int(time.time())
-                self._publish_state()
-        self._transition(st)
-
-    def _publish_state(self) -> None:
-        # only RUNNING goes to KV according to plan
-        if self.ctx.current is not StateEnum.RUNNING:
-            return
-        now = int(time.time())
         payload = {
             "svc": self.svc,
-            "version": self.cfg.global_.version,
             "state": self.ctx.current.name,
-            "status": self._health_status_for(self.ctx.current).name,
-            "ts": now,
-            "since_ts": self.ctx.since_ts,
-            "heartbeat_ts": self.ctx.heartbeat_ts,
-            "owner": self.svc,
-            "last_error": self.ctx.last_error.name if self.ctx.last_error else None,
+            "since": int(self.ctx.since_ts),
+            "version": self.cfg.global_.version,
+            "tags": list(self.cfg.context.tags),
+            "ts": int(time.time()),
         }
-        idx, _ = self.kv.states.read()
-        ok = self.kv.states.cas(payload, idx)
-        self.metrics.counter("terminal_kv_counter").inc({"svc": self.svc, "op": "cas", "result": "done" if ok else "collision"})
+        try:
+            ok = self.kv.states.cas(payload, modify_index=int(idx or 0))
+            if ok:
+                self.logger.info("kv.states.cas.ok", svc=self.svc)
+            else:
+                self.logger.warn("kv.states.cas.conflict", svc=self.svc)
+            return ok
+        except Exception as e:
+            self.logger.warn("kv.states.cas.error", svc=self.svc, err=type(e).__name__)
+            return False
 
-    def _health_status_for(self, state: StateEnum) -> HealthStatusEnum:
-        # Map by plan
-        if state is StateEnum.RUNNING:
-            return HealthStatusEnum.PASSING
-        if state in (StateEnum.PAUSED,):
-            return HealthStatusEnum.MAINTENANCE
-        if state in (StateEnum.ERROR, StateEnum.STOPPING, StateEnum.STOPPED):
-            return HealthStatusEnum.CRITICAL
-        # default early states and degraded
-        return HealthStatusEnum.WARNING
+    def _publish_state(self) -> None:
+        if self.ctx.current is not StateEnum.RUNNING:
+            return
+        now_ms = int(time.time()*1000)
+        min_gap = int(self.cfg.fsm.state_publish_min_interval_ms)
+        if self._last_publish_ts and now_ms - self._last_publish_ts < min_gap:
+            return
 
-    def _state_deadline_ms(self, state: StateEnum) -> int:
-        fsm = self.cfg.fsm
-        mapping = {
-            StateEnum.STARTING: fsm.state_starting_timeout_ms,
-            StateEnum.BOOTSTRAPPING: fsm.state_bootstrapping_timeout_ms,
-            StateEnum.INITIALIZING: fsm.state_initializing_timeout_ms,
-            StateEnum.SECURING: fsm.state_securing_timeout_ms,
-            StateEnum.TLS_TRANSITION: fsm.state_tls_transition_timeout_ms,
-            StateEnum.REGISTERING: fsm.state_registering_timeout_ms,
-            StateEnum.RUNNING: fsm.state_running_tick_timeout_ms,
-        }
-        return mapping.get(state, fsm.state_starting_timeout_ms)
+        # CAS retries with backoff
+        maxr = max(1, int(self.cfg.kv.cas_max_retries))
+        factor = max(1, int(self.cfg.kv.cas_backoff_factor))
+        delay = 0.2
+        for attempt in range(1, maxr+1):
+            if self._publish_state_once():
+                self._last_publish_ts = now_ms
+                return
+            time.sleep(delay)
+            delay *= factor
 
-    def _to_error(self, code: ErrorCodeEnum) -> None:
-        self.ctx.last_error = code
-        self._transition(StateEnum.ERROR)
+    # ---------- Registrar retries ----------
+    def _register_with_retry(self) -> bool:
+        if not self.registrar:
+            return True
+        attempts = max(1, int(self.cfg.registrar.max_rereg_attempts_per_window))
+        cooldown = max(1, int(self.cfg.registrar.reregistration_cooldown_sec))
+        for i in range(1, attempts+1):
+            if self.registrar.register(self.svc):
+                return True
+            self.logger.warn("registrar.retry", svc=self.svc, attempt=i, cooldown_s=cooldown)
+            time.sleep(cooldown)
+        return False
+
+    def _detect_run_mode(self) -> RunModeEnum:
+        from core.policies.marker_policy import MarkerPolicy
+        svc = self.svc or self.cfg.context.name
+        rm = MarkerPolicy.detect_run_mode(self.required_markers, self.markers, svc=svc)
+        self.logger.info("fsm.run_mode", svc=svc, run_mode=rm.name, required=sorted(self.required_markers))
+        return rm
+
+    def _require_stage_gates(self, state: StateEnum) -> bool:
+        gates = self.stage_gates.get(state, [])
+        if not gates:
+            return True
+        missing: list[tuple[str,str]] = []
+        for gs, name in gates:
+            if not self.markers.exists(gs, name):
+                missing.append((gs, name))
+        if missing:
+            self.logger.warn("fsm.gate.wait", svc=self.svc, state=state.name, missing=[f"{gs}/{nm}" for gs,nm in missing])
+            return False
+        return True
+
+    def _require_markers(self) -> tuple[bool, set[str]]:
+        svc = self.svc or self.cfg.context.name
+        return self.markers.require(self.required_markers, svc=svc)
+
+    def _loop_running(self) -> None:
+        hb_period = max(1, int(self.cfg.registrar.heartbeat_period_sec))
+        tick_ms = max(200, int(self.cfg.fsm.state_running_tick_timeout_ms))
+        next_hb = int(time.time())  # немедленный первый heartbeat
+        while True:
+            now = int(time.time())
+            if self.registrar and now >= next_hb:
+                self.registrar.heartbeat(self.svc)
+                next_hb = now + hb_period
+            self._publish_state()
+            time.sleep(tick_ms / 1000.0)
+
+    
+    def run(self) -> None:
+        # STARTING -> BOOTSTRAPPING
+        self.on_enter(StateEnum.STARTING)
+        self.on_enter(StateEnum.BOOTSTRAPPING)
+
+        if not self._require_stage_gates(StateEnum.BOOTSTRAPPING):
+            return
+
+        self.run_mode = self._detect_run_mode()
+
+        if self.run_mode in (RunModeEnum.FIRST, RunModeEnum.RECOVERY):
+            self.on_enter(StateEnum.INITIALIZING)
+            if not self._require_stage_gates(StateEnum.INITIALIZING):
+                return
+            ok, missing = self._require_markers()
+            if not ok:
+                self.logger.warn("fsm.wait_markers", svc=self.svc, missing=sorted(missing))
+                return
+            self.logger.info("fsm.markers.ready", svc=self.svc)
+
+        # SECURING
+        self.on_enter(StateEnum.SECURING)
+        if not self._require_stage_gates(StateEnum.SECURING):
+            return
+
+        # TLS_TRANSITION
+        self.on_enter(StateEnum.TLS_TRANSITION)
+        # минимальная проверка PEM-файлов
+        try:
+            certs_dir = str(self.cfg.fs.certs_dir)
+            cert = f"{certs_dir}/cert.pem"
+            fullchain = f"{certs_dir}/fullchain.pem"
+            ca = f"{certs_dir}/ca.crt"
+            if not self.tls_probe.validate_chain(cert, fullchain, ca):
+                self.logger.warn("tls.transition.wait_pem", svc=self.svc, dir=certs_dir)
+                return
+            # пробуем выполнить hot-reload контекста (идемпотентно)
+            self.tls_reloader.reload_ssl_context()
+        except Exception as e:
+            self.logger.warn("tls.transition.error", svc=self.svc, err=type(e).__name__)
+            return
+
+        # REGISTERING
+        if not self._require_stage_gates(StateEnum.REGISTERING):
+            return
+        self.on_enter(StateEnum.REGISTERING)
+
+        if not self._register_with_retry():
+            self.logger.warn("fsm.register.fail", svc=self.svc)
+            return
+
+        if not self._require_stage_gates(StateEnum.RUNNING):
+            return
+
+        self.on_enter(StateEnum.RUNNING)
+        self._publish_state()
+        self._loop_running()
+    

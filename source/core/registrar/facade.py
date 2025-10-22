@@ -6,7 +6,7 @@ from entities import ErrorCodeEnum
 
 @dataclass
 class Registrar:
-    """Порт регистрации сервиса и TTL-heartbeat поверх клиент-адаптера.
+    """Порт регистрации и TTL-heartbeat поверх клиент-адаптера.
     Без deadline-параметров. Окна берутся из cfg.registrar.* и FSM.
     """
     cfg: IConfigs
@@ -22,7 +22,7 @@ class Registrar:
     def _service_def(self, svc: str) -> Dict:
         cs = self.cfg.context
         rs = self.cfg.registrar
-        service: Dict = {
+        return {
             "ID": self._service_id(svc),
             "Name": svc,
             "Port": int(cs.port),
@@ -37,9 +37,7 @@ class Registrar:
                 }
             ],
         }
-        return service
 
-    # ---- API ----
     def register(self, svc: str) -> bool:
         try:
             ok = self.client.register_service(self._service_def(svc))

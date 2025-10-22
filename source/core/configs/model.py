@@ -24,7 +24,7 @@ class ConsulSection:
 class VaultSection:
     host: str = "vault"
     http_port: int = 8200
-    https_port: int = 8200
+    https_port: int = 8200  # обычно тот же 8200, оставлен для единообразия
     pki_root_path: str = "pki-root"
     pki_int_path: str = "pki-int"
     pki_role: str = "terminal-leaf"
@@ -32,6 +32,7 @@ class VaultSection:
 @dataclass(frozen=True)
 class TraefikSection:
     host: str = "traefik"
+    http_port: int = 8080
     https_port: int = 8443
 
 @dataclass(frozen=True)
@@ -43,23 +44,17 @@ class LoggingSection:
 
 @dataclass(frozen=True)
 class MetricsSection:
+    host: str = "0.0.0.0"
     path: str = "/metrics"
     port: int = 8000
 
 @dataclass(frozen=True)
 class FSSection:
-    root_dir: str = "/app"
-    markers_dir: str = "/app/fs/markers"
-    secrets_dir: str = "/app/fs/secrets"
-    certs_dir: str = "/app/fs/certs"
+    certs_dir: str = "/certs"
+    secrets_dir: str = "/secrets"
 
 @dataclass(frozen=True)
 class TLSSection:
-    cert_name: str = "svc"
-    cert_path: str = "/app/fs/certs/cert.pem"
-    key_path: str = "/app/fs/certs/privkey.pem"
-    chain_path: str = "/app/fs/certs/fullchain.pem"
-    ca_path: str = "/app/fs/certs/ca.crt"
     certs_rotate_hours: int = 168
     reloader_strategy: str = "SSL_CTX"
     watch_debounce_ms: int = 300
@@ -67,19 +62,18 @@ class TLSSection:
 
 @dataclass(frozen=True)
 class KVSection:
-    request_timeout_ms: int = 5000
     cas_backoff_factor: int = 2
     cas_max_retries: int = 5
+    request_timeout_ms: int = 5000
 
 @dataclass(frozen=True)
 class FSMSection:
-    state_starting_timeout_ms: int = 10000
     state_bootstrapping_timeout_ms: int = 5000
     state_initializing_timeout_ms: int = 15000
     state_securing_timeout_ms: int = 10000
     state_tls_transition_timeout_ms: int = 5000
     state_registering_timeout_ms: int = 5000
-    state_running_tick_timeout_ms: int = 5000
+    state_running_tick_timeout_ms: int = 1000
     state_publish_min_interval_ms: int = 5000
     degraded_recovery_window_ms: int = 60000
     degraded_transition_window_ms: int = 30000
@@ -90,6 +84,8 @@ class RegistrarSection:
     ttl_sec: int = 15
     heartbeat_period_sec: int = 7
     deregister_critical_service_after_sec: int = 45
+    reregistration_cooldown_sec: int = 15
+    max_rereg_attempts_per_window: int = 5
 
 @dataclass(frozen=True)
 class Model:
