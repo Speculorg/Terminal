@@ -101,3 +101,4 @@ class Model:
     kv: KVSection = KVSection()
     fsm: FSMSection = FSMSection()
     registrar: RegistrarSection = RegistrarSection()
+    config_hash: str = ""

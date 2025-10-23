@@ -1,22 +1,21 @@
 from __future__ import annotations
 from dataclasses import dataclass
 from typing import Optional
-from interfaces import (
-    IDeps, IConfigs, ILogger, IMetrics, INet, IFS, IMarker,
-    IKV, IRegistrar, IFSM, ITLSReloader, ITLSWatch, ITLSProbe
-)
 
-@dataclass(frozen=True)
+from interfaces import IConfigs, ILogger, IFS, IMarker, IKV, IRegistrar, INet, IMetrics, IDeps
+
+@dataclass
 class BaseDeps(IDeps):
+    """Простой контейнер зависимостей. Экземпляры создаются в composition-root."""
     configs: IConfigs
     logger: ILogger
-    metrics: IMetrics
-    net: INet
     fs: IFS
     markers: IMarker
     kv: IKV
     registrar: IRegistrar
-    tls_reloader: ITLSReloader
-    tls_watch: ITLSWatch
-    tls_probe: ITLSProbe
-    fsm: IFSM  # допускается тонкая обвязка-реализация IFSM на базе core.fsm.FSM
+    net: INet
+    metrics: IMetrics
+
+    def close(self) -> None:
+        # крючок для аккуратного завершения, если появятся ресурсы
+        pass

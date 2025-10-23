@@ -47,10 +47,10 @@ class BaseService(IService):
         from adapters.registrar import ConsulRegistrar
         from core.tls import TLSReloader, TLSWatch, TLSProbe
         from core.fsm import FSM
+        from core.logging import Logger
 
         cfg = Configs()
-
-        logger = JsonLogger(cfg)
+        logger = Logger(cfg)
         metrics = PrometheusMetrics()
         try:
             metrics.start_http_exporter(host=str(cfg.metrics.host), port=int(cfg.metrics.port), path=cfg.metrics.path)

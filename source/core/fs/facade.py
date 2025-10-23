@@ -3,7 +3,7 @@ import os
 from typing import Callable
 from interfaces.i_fs import IFS, IWatcher
 from .paths import Paths
-from .ops import safe_makedirs, atomic_write, atomic_write_text, atomic_read, atomic_read_text, listdir as _ls, remove as _rm
+from .ops import safe_makedirs, listdir as _ls, remove as _rm
 from .watcher import _Watcher
 from .secrets_store import SecretsStore
 from .certs_store import CertsStore
@@ -12,18 +12,27 @@ from .temp_store import TempStore
 
 class FS(IFS):
     def __init__(self, cfg=None) -> None:
-        self.paths = Paths()
-        # директории из cfg при наличии
-        secrets_dir = getattr(getattr(getattr(cfg, "model", None), "fs", None), "secrets_dir", self.paths.secrets_dir)
-        certs_dir = getattr(getattr(getattr(cfg, "model", None), "fs", None), "certs_dir", self.paths.certs_dir)
-        tmp_dir = self.paths.tmp_dir
-        # подфасады
-        self.secrets = SecretsStore(secrets_dir)
-        self.certs = CertsStore(certs_dir)
+        # Инициализация путей на основе cfg.fs при наличии, иначе дефолты
+        p = Paths()
+        if cfg is not None and getattr(cfg, "fs", None) is not None:
+            try:
+                p = Paths(
+                    fs_root="fs",
+                    markers_dir=str(cfg.fs.markers_dir),
+                    secrets_dir=str(cfg.fs.secrets_dir),
+                    certs_dir=str(cfg.fs.certs_dir),
+                    tmp_dir=str(cfg.fs.tmp_dir),
+                )
+            except Exception:
+                pass
+        self.paths = p
+        # Подфасады
+        self.secrets = SecretsStore(self.paths.secrets_dir)
+        self.certs = CertsStore(self.paths.certs_dir)
+        self.temp = TempStore(self.paths.tmp_dir)
         self.markers = MarkersStore(self.paths)
-        self.temp = TempStore(tmp_dir)
 
-    # --- базовые IFS ---
+    # --- базовые операции ---
     def exists(self, path: str) -> bool:
         return os.path.exists(self.paths.ensure_relative(path))
 
@@ -34,9 +43,10 @@ class FS(IFS):
         _rm(self.paths.ensure_relative(path))
 
     def makedirs(self, path: str, mode: int = 0o755) -> None:
-        safe_makedirs(self.paths.ensure_relative(path), mode=mode)
+        safe_makedirs(self.paths.ensure_relative(path), mode)
 
-    def atomic_write(self, path: str, data: bytes, mode: int = 0o644) -> None:
+    # --- атомарные чтение/запись ---
+    def atomic_write(self, path: str, data, mode: int = 0o644) -> None:
         from .ops import atomic_write as _aw
         _aw(self.paths.ensure_relative(path), data, mode=mode)
 
@@ -52,6 +62,7 @@ class FS(IFS):
         from .ops import atomic_read_text as _art
         return _art(self.paths.ensure_relative(path), encoding=encoding)
 
+    # --- watcher ---
     def start_file_watch(self, paths: list[str], on_change: Callable[[list[str]], None], poll_interval_ms: int) -> "IWatcher":
         rels = [self.paths.ensure_relative(p) for p in paths]
         return _Watcher(rels, on_change, poll_interval_ms).start()

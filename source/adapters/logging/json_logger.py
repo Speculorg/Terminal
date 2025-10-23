@@ -17,39 +17,61 @@ _LEVEL_ORDER = {
     LogLevelEnum.ERROR.value: 40,
 }
 
+def _ts_ms() -> int:
+    return int(time.time() * 1000)
+
+def _safe_write_json(obj: Dict[str, Any]) -> None:
+    try:
+        json.dump(obj, sys.stdout, ensure_ascii=False, separators=(",", ":"))
+        sys.stdout.write("\n")
+        sys.stdout.flush()
+    except Exception:
+        pass
+
+def _extract_error_code(record: Mapping[str, Any]) -> Optional[str]:
+    err = record.get("error")
+    if isinstance(err, dict):
+        code = err.get("code")
+        if isinstance(code, str):
+            return code
+    return None
+
 class JsonLogger(ILogger):
+    """Простой JSON-логгер.
+    Схема: timestamp, level, svc, state, correlation_id, message, event?, details?, error?
+    Без trace_id. Анти-флуд WARN: окно {} сек.
+    """.format(_WARN_FLOOD_WINDOW_SEC)
+
     def __init__(self, cfg: IConfigs) -> None:
         self._cfg = cfg
+        self._level = str(getattr(cfg.logging, "level", "INFO")).upper()
+        self._min_order = _LEVEL_ORDER.get(self._level, 20)
         self._lock = threading.Lock()
         self._last_warn: Dict[Tuple[str, Optional[str], Optional[str]], float] = {}
-        # Порог уровня из конфига (по умолчанию INFO)
-        level = str(getattr(cfg.logging, "level", "INFO")).upper()
-        self._threshold = _LEVEL_ORDER.get(level, _LEVEL_ORDER[LogLevelEnum.INFO.value])
 
-    def log(self, level: LogLevelEnum, message: str, *, svc: Optional[str] = None,
-            state: Optional[str] = None, event: Optional[str] = None,
-            details: Optional[Mapping[str, Any]] = None) -> None:
-        # Фильтрация по уровню
-        if _LEVEL_ORDER.get(level.value, 0) < self._threshold:
+    def _enabled(self, level: LogLevelEnum) -> bool:
+        return _LEVEL_ORDER[level.value] >= self._min_order
+
+    def log(self, level: LogLevelEnum, message: str, *, svc: Optional[str]=None, state: Optional[str]=None, event: Optional[str]=None, details: Optional[Mapping[str, Any]]=None) -> None:
+        if not self._enabled(level):
             return
-
-        ctx = LogContext.build(self._cfg, state=state)
-        record = {
-            "timestamp": _utc_rfc3339(),
+        ctx = LogContext.make(self._cfg, state=state)
+        record: Dict[str, Any] = {
+            "timestamp": _ts_ms(),
             "level": level.value,
             "svc": svc or ctx.svc,
-            "state": state,
-            "event": event,
+            "state": state or ctx.state,
             "correlation_id": ctx.correlation_id,
-            "trace_id": ctx.trace_id,
             "message": message,
-            "details": details if details is not None else None,
-            "deadline_ms": None,
-            "retry": None,
-            "error": None,
         }
+        if event is not None:
+            record["event"] = event
+        if details is not None:
+            record["details"] = details
+        # error не формируем здесь. Фасад может передать в details/error при необходимости.
+
         if level == LogLevelEnum.WARN:
-            if not self._warn_ok(record["svc"], record["event"], _extract_error_code(record)):
+            if not self._warn_ok(record.get("svc",""), record.get("event"), _extract_error_code(record)):
                 return
         _safe_write_json(record)
 
@@ -73,26 +95,4 @@ class JsonLogger(ILogger):
             if now - last < _WARN_FLOOD_WINDOW_SEC:
                 return False
             self._last_warn[key] = now
-            if len(self._last_warn) > 1024:
-                cutoff = now - _WARN_FLOOD_WINDOW_SEC
-                self._last_warn = {k: t for k, t in self._last_warn.items() if t >= cutoff}
-            return True
-
-def _utc_rfc3339() -> str:
-    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-
-def _safe_write_json(obj: Mapping[str, Any]) -> None:
-    try:
-        json.dump(obj, sys.stdout, ensure_ascii=False, separators=(",", ":"))
-        sys.stdout.write("\n")
-        sys.stdout.flush()
-    except Exception:
-        pass
-
-def _extract_error_code(record: Mapping[str, Any]) -> Optional[str]:
-    err = record.get("error")
-    if isinstance(err, dict):
-        code = err.get("code")
-        if isinstance(code, str):
-            return code
-    return None
+        return True

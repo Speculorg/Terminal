@@ -1,6 +1,6 @@
 from __future__ import annotations
 from typing import Optional, Dict
-from interfaces.i_kv import IKV
+from interfaces import IKV
 from .paths import KVPaths
 
 class ConfigsStore:
@@ -9,7 +9,11 @@ class ConfigsStore:
         self._kv = kv
         self._svc = svc
         self._paths = KVPaths()
-    def read_global(self, name: str) -> tuple[int, Optional[Dict]]:
-        return self._kv.read_json(self._paths.configs_global_key(name))
-    def read_service(self, name: str) -> tuple[int, Optional[Dict]]:
-        return self._kv.read_json(self._paths.configs_svc_key(self._svc, name))
+
+    def read_global(self, key: str) -> tuple[int, Optional[Dict]]:
+        full = f"{self._paths.configs_global_prefix()}/{key}"
+        return self._kv.read_json(full)
+
+    def read_service(self, key: str) -> tuple[int, Optional[Dict]]:
+        full = f"{self._paths.configs_service_prefix(self._svc)}/{key}"
+        return self._kv.read_json(full)

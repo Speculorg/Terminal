@@ -1,25 +1,15 @@
 from __future__ import annotations
-import http.client, ssl, urllib.parse
+from typing import Tuple
+from .facade import Net
 
-def probe_http(url: str, *, timeout_ms: int = 5_000) -> tuple[int, bytes]:
-    p = urllib.parse.urlparse(url)
-    port = p.port or 80
-    conn = http.client.HTTPConnection(p.hostname, port, timeout=timeout_ms/1000.0)
-    try:
-        conn.request("GET", p.path or "/")
-        r = conn.getresponse()
-        return r.status, r.read()
-    finally:
-        conn.close()
+def tcp(host: str, port: int, *, cfg=None, timeout_ms: int | None = None) -> bool:
+    n = Net(cfg) if cfg is not None else Net(type("C", (), {})())
+    return n.tcp_ping(host, port, timeout_ms=timeout_ms)
 
-def probe_https(url: str, *, timeout_ms: int = 5_000) -> tuple[int, bytes]:
-    p = urllib.parse.urlparse(url)
-    port = p.port or 443
-    ctx = ssl.create_default_context()
-    conn = http.client.HTTPSConnection(p.hostname, port, timeout=timeout_ms/1000.0, context=ctx)
-    try:
-        conn.request("GET", p.path or "/")
-        r = conn.getresponse()
-        return r.status, r.read()
-    finally:
-        conn.close()
+def tls(host: str, port: int, *, cfg=None, timeout_ms: int | None = None) -> bool:
+    n = Net(cfg) if cfg is not None else Net(type("C", (), {})())
+    return n.tls_handshake(host, port, timeout_ms=timeout_ms)
+
+def http_get(url: str, *, cfg=None, timeout_ms: int | None = None) -> Tuple[int,int]:
+    n = Net(cfg) if cfg is not None else Net(type("C", (), {})())
+    return n.http_get(url, timeout_ms=timeout_ms)

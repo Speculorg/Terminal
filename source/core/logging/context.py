@@ -15,14 +15,11 @@ class LogContext:
     correlation_id: str
     trace_id: Optional[str]
 
-    @staticmethod
-    def build(cfg: IConfigs, *, state: Optional[str] = None,
-              correlation_id: Optional[str] = None,
-              trace_id: Optional[str] = None) -> "LogContext":
+    @classmethod
+    def make(cls, cfg: IConfigs, *, state: Optional[str] = None, correlation_id: Optional[str] = None, trace_id: Optional[str] = None) -> "LogContext":
         hdr = getattr(cfg.logging, "correlation_id_header", "X-Request-ID")
-        cid = correlation_id or os.environ.get(hdr, "") or ""
-        if not cid or not _UUID_RE.match(cid):
-            cid = str(uuid.uuid4())
+        raw = correlation_id or os.environ.get(hdr, "") or ""
+        cid = raw if _UUID_RE.match(raw) else str(uuid.uuid4())
         max_len = int(getattr(cfg.logging, "correlation_id_len_max", 64))
         if len(cid) > max_len:
             cid = cid[:max_len]

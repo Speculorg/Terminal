@@ -14,7 +14,7 @@ class Markers(IMarker):
         return self._fs.markers.exists(svc, name)
 
     def set(self, svc: str, name: str, payload: str | None = None) -> None:
-        self._fs.markers.set(svc, name, payload=payload)
+        self._fs.markers.set(svc, name, payload)
 
     def delete(self, svc: str, name: str) -> None:
         self._fs.markers.delete(svc, name)

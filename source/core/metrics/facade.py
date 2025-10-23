@@ -13,15 +13,15 @@ class _Counter:
         self._values: Dict[Tuple[Tuple[str,str], ...], float] = {}
 
     def inc(self, labels: Mapping[str,str], v: float = 1.0) -> None:
-        key = tuple(sorted(labels.items()))
+        key = tuple(sorted((k,v) for k,v in labels.items() if k in ALLOWED_LABEL_KEYS))
         self._values[key] = self._values.get(key, 0.0) + float(v)
 
     def export(self) -> List[str]:
-        out: List[str] = []
+        lines: List[str] = []
         for labels, val in self._values.items():
-            lab = ','.join([f'{k}="{_escape(v)}"' for k,v in labels])
-            out.append(f'{self._name}{{{lab}}} {val:.6f}')
-        return out
+            lbl = ",".join(f'{k}="{_escape(v)}"' for k,v in labels)
+            lines.append(f"{self._name}{{{lbl}}} {val}")
+        return lines
 
 class _Gauge:
     def __init__(self, name: str) -> None:
@@ -29,53 +29,45 @@ class _Gauge:
         self._values: Dict[Tuple[Tuple[str,str], ...], float] = {}
 
     def set(self, labels: Mapping[str,str], v: float) -> None:
-        key = tuple(sorted(labels.items()))
+        key = tuple(sorted((k,v) for k,v in labels.items() if k in ALLOWED_LABEL_KEYS))
         self._values[key] = float(v)
 
     def export(self) -> List[str]:
-        out: List[str] = []
+        lines: List[str] = []
         for labels, val in self._values.items():
-            lab = ','.join([f'{k}="{_escape(v)}"' for k,v in labels])
-            out.append(f'{self._name}{{{lab}}} {val:.6f}')
-        return out
+            lbl = ",".join(f'{k}="{_escape(v)}"' for k,v in labels)
+            lines.append(f"{self._name}{{{lbl}}} {val}")
+        return lines
 
 class _Histogram:
-    def __init__(self, name: str, buckets: List[int]) -> None:
+    def __init__(self, name: str, buckets: Tuple[int,...]) -> None:
         self._name = name
-        self._buckets = list(buckets)
-        self._values: Dict[Tuple[Tuple[str,str], ...], List[float]] = {}
+        self._buckets = buckets
+        self._counts: Dict[Tuple[Tuple[str,str], ...], Dict[int,int]] = {}
 
     def observe(self, labels: Mapping[str,str], v_ms: float) -> None:
-        key = tuple(sorted(labels.items()))
-        self._values.setdefault(key, []).append(float(v_ms))
+        key = tuple(sorted((k,v) for k,v in labels.items() if k in ALLOWED_LABEL_KEYS))
+        bucket_counts = self._counts.setdefault(key, {b:0 for b in self._buckets})
+        for b in self._buckets:
+            if v_ms <= b:
+                bucket_counts[b] += 1
 
     def export(self) -> List[str]:
-        out: List[str] = []
-        for labels, values in self._values.items():
-            values_sorted = sorted(values)
-            lab_base = ','.join([f'{k}="{_escape(v)}"' for k,v in labels])
-            count = 0
-            for b in self._buckets:
-                count = sum(1 for v in values_sorted if v <= b)
-                out.append(f'{self._name}_bucket{{{lab_base},le="{b}"}} {count}')
-            # +Inf
-            out.append(f'{self._name}_bucket{{{lab_base},le="+Inf"}} {len(values_sorted)}')
-            # sum and count
-            out.append(f'{self._name}_sum{{{lab_base}}} {sum(values_sorted):.6f}')
-            out.append(f'{self._name}_count{{{lab_base}}} {len(values_sorted)}')
-        return out
+        lines: List[str] = []
+        for labels, counts in self._counts.items():
+            for b, c in counts.items():
+                lbl = ",".join(f'{k}="{_escape(v)}"' for k,v in labels) + f',le="{b}"'
+                lines.append(f"{self._name}_bucket{{{lbl}}} {c}")
+        return lines
 
 class Metrics:
-    """Минимальный реестр счётчиков/датчиков/гистограмм + экспорт в формате Prometheus."""
-    def __init__(self) -> None:
+    def __init__(self, buckets_ms: Tuple[int,...] = DEFAULT_BUCKETS_MS) -> None:
         self._counters: Dict[str, _Counter] = {}
         self._gauges: Dict[str, _Gauge] = {}
         self._histograms: Dict[str, _Histogram] = {}
-        self._allowed = set(ALLOWED_LABEL_KEYS)
-        self._card_limit = CARDINALITY_LIMIT
-        self._buckets = list(DEFAULT_BUCKETS_MS)
+        self._buckets = buckets_ms
 
-    # --- builders ---
+    # --- factories ---
     def counter(self, name: str) -> _Counter:
         return self._counters.setdefault(name, _Counter(name))
 
@@ -91,4 +83,4 @@ class Metrics:
         for reg in (self._counters, self._gauges, self._histograms):
             for obj in reg.values():
                 lines.extend(obj.export())
-        return "\n".join(lines) + "\n"
+        return "\\n".join(lines) + "\\n"

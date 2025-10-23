@@ -18,7 +18,7 @@ class _Watcher:
 
     def stop(self) -> None:
         self._stop.set()
-        self._thread.join(timeout=1.0)
+        self._thread.join(timeout=self._poll * 2)
 
     def _snapshot(self) -> None:
         for p in self._paths:

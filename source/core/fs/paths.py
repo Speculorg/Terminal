@@ -7,19 +7,21 @@ class Paths:
     Маркеры всегда в `fs/markers`. Секреты и сертификаты берутся из cfg.
     """
     fs_root: str = "fs"
-    markers_root: str = "fs/markers"
+    markers_dir: str = "fs/markers"
     secrets_dir: str = "fs/secrets"
     certs_dir: str = "fs/certs"
     tmp_dir: str = "fs/tmp"
 
+    def ensure_relative(self, path: str) -> str:
+        if not path:
+            return self.fs_root
+        if path.startswith("/"):
+            raise ValueError("absolute paths are not allowed")
+        return path
+
+    # --- markers ---
     def svc_markers_dir(self, svc: str) -> str:
-        return f"{self.markers_root}/{svc}"
+        return f"{self.markers_dir}/{svc}"
 
     def marker_file(self, svc: str, name: str) -> str:
         return f"{self.svc_markers_dir(svc)}/{name}.done"
-
-    def ensure_relative(self, path: str) -> str:
-        # простая защита от абсолютных путей
-        if path.startswith('/'):
-            raise ValueError("absolute paths are not allowed in FS facade")
-        return path

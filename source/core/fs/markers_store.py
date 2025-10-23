@@ -1,5 +1,5 @@
 from __future__ import annotations
-import time, os
+import os
 from .paths import Paths
 from .ops import safe_makedirs, atomic_write_text, listdir, remove
 
@@ -14,22 +14,20 @@ class MarkersStore:
         return os.path.exists(self.path_for(svc, name))
 
     def set(self, svc: str, name: str, payload: str | None = None) -> None:
-        dir_path = self._paths.svc_markers_dir(svc)
-        safe_makedirs(dir_path, 0o755)
-        ts = int(time.time())
-        body = payload if payload is not None else f"{ts}\n"
-        atomic_write_text(self.path_for(svc, name), body, mode=0o644)
+        d = self._paths.svc_markers_dir(svc)
+        safe_makedirs(d, 0o755)
+        text = "" if payload is None else str(payload)
+        atomic_write_text(self.path_for(svc, name), text, mode=0o644)
 
     def delete(self, svc: str, name: str) -> None:
         remove(self.path_for(svc, name))
 
     def list(self, svc: str) -> list[str]:
-        dir_path = self._paths.svc_markers_dir(svc)
-        return [f for f in listdir(dir_path) if f.endswith(".done")]
+        d = self._paths.svc_markers_dir(svc)
+        files = listdir(d)
+        return [f[:-5] for f in files if f.endswith(".done")]
 
     def require(self, required: set[str], svc: str) -> tuple[bool, set[str]]:
-        missing: set[str] = set()
-        for r in required:
-            if not self.exists(svc, r):
-                missing.add(r)
-        return (len(missing) == 0), missing
+        have = set(self.list(svc))
+        missing = required - have
+        return len(missing) == 0, missing

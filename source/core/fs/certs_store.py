@@ -8,10 +8,9 @@ class CertsStore:
     def path(self, name: str) -> str:
         return f"{self._root}/{name}"
 
-    def write_pem(self, name: str, text: str) -> None:
-        safe_makedirs(self._root, 0o750)
-        mode = 0o644 if name.endswith(".crt") or name.endswith(".pem") else 0o640
+    def write_pem(self, name: str, text: str, mode: int = 0o644) -> None:
+        safe_makedirs(self._root, 0o755)
         atomic_write_text(self.path(name), text, mode=mode)
 
-    def read_pem(self, name: str) -> str:
-        return atomic_read_text(self.path(name))
+    def read_pem(self, name: str, encoding: str = "utf-8") -> str:
+        return atomic_read_text(self.path(name), encoding=encoding)

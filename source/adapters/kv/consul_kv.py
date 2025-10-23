@@ -1,30 +1,17 @@
 from __future__ import annotations
 import json, base64
 import urllib.request, urllib.error
-from typing import Optional, Dict
-
-from interfaces.i_kv import IKV
+from typing import Optional, Dict, Tuple
+from interfaces import IKV, IConfigs
 
 class ConsulKV(IKV):
-    """IKV через HTTP API Consul KV.
-    - базовый URL: http(s)://{host}:{port}/v1/kv
-    - токен: X-Consul-Token, считывается из cfg.context.consul_token (если путь задан)
-    - timeout: cfg.kv.request_timeout_ms (мс)
-    """
-    def __init__(self, cfg, *, scheme: str | None = None) -> None:
+    """Минимальная HTTP-реализация IKV для Consul KV API."""
+    def __init__(self, cfg: IConfigs) -> None:
         self._host = cfg.consul.host
+        self._scheme = "http"  # HTTPS добавим отдельно при необходимости
         self._port = cfg.consul.http_port
-        self._timeout = int(getattr(cfg.kv, "request_timeout_ms", 5000)) / 1000.0
-        self._scheme = scheme or "http"
-        token_path = getattr(cfg.context, "consul_token", "") or ""
-        token_value = ""
-        if token_path:
-            try:
-                with open(token_path, "r", encoding="utf-8") as f:
-                    token_value = f.read().strip()
-            except FileNotFoundError:
-                token_value = ""
-        self._token = token_value
+        self._token = cfg.context.consul_token
+        self._timeout = max(1, int(cfg.kv.request_timeout_ms) // 1000)
 
     # --- helpers ---
     def _base(self) -> str:
@@ -40,7 +27,7 @@ class ConsulKV(IKV):
         req = urllib.request.Request(url, data=data, method=method, headers=self._headers())
         return urllib.request.urlopen(req, timeout=self._timeout)
 
-    # --- low-level read (json envelope) ---
+    # --- low-level read (envelope) ---
     def _read_envelope(self, key: str) -> tuple[int, Optional[bytes]]:
         url = f"{self._base()}/{key}"
         try:
@@ -50,27 +37,31 @@ class ConsulKV(IKV):
                 if not arr:
                     return 0, None
                 obj = arr[0]
-                idx = int(obj.get("ModifyIndex", 0) or 0)
+                idx = int(obj.get("ModifyIndex", 0))
                 val_b64 = obj.get("Value")
                 if val_b64 is None:
                     return idx, None
-                raw = base64.b64decode(val_b64) if val_b64 else b""
-                return idx, raw
+                return idx, base64.b64decode(val_b64)
         except urllib.error.HTTPError as e:
             if e.code == 404:
                 return 0, None
             raise
+        except urllib.error.URLError:
+            return 0, None
 
-    # --- IKV: text ---
+    # --- IKV text ---
     def read_text(self, key: str) -> tuple[int, Optional[str]]:
         idx, raw = self._read_envelope(key)
         if raw is None:
             return idx, None
-        return idx, raw.decode("utf-8")
+        try:
+            return idx, raw.decode("utf-8")
+        except Exception:
+            return idx, None
 
     def put_text(self, key: str, value: str) -> None:
-        data = value.encode("utf-8")
         url = f"{self._base()}/{key}"
+        data = value.encode("utf-8")
         with self._req(url, method="PUT", data=data) as resp:
             resp.read()
 
@@ -78,24 +69,21 @@ class ConsulKV(IKV):
         url = f"{self._base()}/{key}?cas={modify_index}"
         data = value.encode("utf-8")
         with self._req(url, method="PUT", data=data) as resp:
-            body = resp.read()
-            try:
-                return bool(json.loads(body.decode("utf-8")))
-            except json.JSONDecodeError:
-                return body.strip().lower() == b"true"
+            body = resp.read().decode("utf-8")
+            return body.strip().lower() == "true"
 
-    # --- IKV: json ---
-    def read_json(self, key: str):
+    # --- IKV json ---
+    def read_json(self, key: str) -> tuple[int, Optional[Dict]]:
         idx, text = self.read_text(key)
-        if text is None or text == "":
+        if text is None:
             return idx, None
         try:
             return idx, json.loads(text)
-        except json.JSONDecodeError:
+        except Exception:
             return idx, None
 
     def put_json(self, key: str, obj: Dict) -> None:
-        self.put_text(key, json.dumps(obj, separators=(",", ":"), ensure_ascii=False))
+        self.put_text(key, json.dumps(obj, ensure_ascii=False, separators=(',',':')))
 
     def cas_json(self, key: str, obj: Dict, modify_index: int) -> bool:
-        return self.cas_text(key, json.dumps(obj, separators=(",", ":"), ensure_ascii=False), modify_index)
+        return self.cas_text(key, json.dumps(obj, ensure_ascii=False, separators=(',',':')), modify_index)

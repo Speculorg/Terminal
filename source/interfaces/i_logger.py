@@ -1,6 +1,7 @@
 from __future__ import annotations
 from typing import Protocol, runtime_checkable, Optional, Mapping, Any
-from entities.log_level_enum import LogLevelEnum
+
+from entities import LogLevelEnum
 
 @runtime_checkable
 class ILogger(Protocol):

@@ -1,12 +1,12 @@
 from __future__ import annotations
-from typing import Protocol, runtime_checkable, Optional, Dict
+from typing import Protocol, Optional, Dict
 
-@runtime_checkable
 class IKV(Protocol):
     """Контракт KV-хранилища с индексом модификации.
     Все чтения возвращают пару (modify_index, payload_or_None).
     CAS использует тот же modify_index.
     """
+
     # Текстовые операции
     def read_text(self, key: str) -> tuple[int, Optional[str]]: ...
     def put_text(self, key: str, value: str) -> None: ...

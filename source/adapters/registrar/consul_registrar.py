@@ -1,72 +1,62 @@
 from __future__ import annotations
-import http.client
 import json
+import http.client
 import ssl
-from dataclasses import dataclass, field
-from typing import Optional, Tuple
+from typing import Optional, Dict
 
 from interfaces import IConfigs, ILogger
 
-@dataclass
 class ConsulRegistrar:
-    cfg: IConfigs
-    logger: ILogger
-    _token_cache: Optional[str] = field(default=None, init=False)
-
-    # --- low-level HTTP ---
-    def _token(self) -> str:
-        if self._token_cache is not None:
-            return self._token_cache
-        path = self.cfg.context.consul_token
-        token = ""
-        if path:
-            try:
-                with open(path, "r", encoding="utf-8") as f:
-                    token = f.read().strip()
-            except Exception:
-                token = ""
-        self._token_cache = token
-        return token
+    """Минимальный HTTP клиент для регистрации service+TTL в Consul Agent API."""
+    def __init__(self, cfg: IConfigs, logger: ILogger) -> None:
+        self.cfg = cfg
+        self.logger = logger
+        self._token_cache: Optional[str] = cfg.context.consul_token
 
     def _headers(self) -> dict:
         h = {"Content-Type": "application/json"}
-        t = self._token()
+        t = self._token_cache
         if t:
             h["X-Consul-Token"] = t
         return h
 
     def _conn(self) -> http.client.HTTPConnection:
-        host = self.cfg.consul.host
-        port = int(self.cfg.consul.https_port)
-        context = ssl.create_default_context()
-        return http.client.HTTPSConnection(host, port, context=context, timeout=5.0)
+        # Используем HTTP по умолчанию для agent (127.0.0.1 или consul), HTTPS можно добавить позже
+        return http.client.HTTPConnection(self.cfg.consul.host, self.cfg.consul.http_port, timeout=5)
 
-    def _do(self, method: str, path: str, body: Optional[dict]) -> Tuple[int, str]:
+    def register_service(self, svc_id: str, name: str, port: int, tags: list[str], ttl_sec: int) -> bool:
+        body = {
+            "ID": svc_id,
+            "Name": name,
+            "Port": port,
+            "Tags": tags,
+            "Check": {"TTL": f"{int(ttl_sec)}s"}
+        }
         conn = self._conn()
         try:
-            data = None if body is None else json.dumps(body)
-            conn.request(method, path, body=data, headers=self._headers())
+            conn.request("PUT", "/v1/agent/service/register", body=json.dumps(body), headers=self._headers())
             resp = conn.getresponse()
-            payload = resp.read().decode("utf-8", "ignore")
-            return resp.status, payload
+            resp.read()
+            return 200 <= resp.status < 300
         finally:
-            try:
-                conn.close()
-            except Exception:
-                pass
+            conn.close()
 
-    # --- high-level operations ---
-    def register_service(self, service_def: dict) -> bool:
-        status, _ = self._do("PUT", "/v1/agent/service/register", service_def)
-        self.logger.info("consul.agent.service.register", status=status)
-        return 200 <= status < 300
-
-    def deregister_service(self, service_id: str) -> bool:
-        status, _ = self._do("PUT", f"/v1/agent/service/deregister/{service_id}", None)
-        self.logger.info("consul.agent.service.deregister", service_id=service_id, status=status)
-        return 200 <= status < 300
+    def deregister_service(self, svc_id: str) -> bool:
+        conn = self._conn()
+        try:
+            conn.request("PUT", f"/v1/agent/service/deregister/{svc_id}", headers=self._headers())
+            resp = conn.getresponse()
+            resp.read()
+            return 200 <= resp.status < 300
+        finally:
+            conn.close()
 
     def pass_ttl(self, check_id: str) -> bool:
-        status, _ = self._do("PUT", f"/v1/agent/check/pass/{check_id}", None)
-        self.logger.info("consul.agent.check.pass", check_id=check_id, status=status)
-        return 200 <= status < 300
+        conn = self._conn()
+        try:
+            conn.request("PUT", f"/v1/agent/check/pass/{check_id}", headers=self._headers())
+            resp = conn.getresponse()
+            resp.read()
+            return 200 <= resp.status < 300
+        finally:
+            conn.close()

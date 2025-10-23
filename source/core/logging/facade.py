@@ -1,21 +1,21 @@
 from __future__ import annotations
+from typing import Optional, Mapping, Any
 from interfaces import ILogger, IConfigs
-from adapters.logging import JsonLogger
 
 class Logger(ILogger):
-    """Фасад логирования ядра. Делегирует в JsonLogger."""
+    """Фасад логирования ядра. Делегирует в JsonLogger (adapter)."""
     def __init__(self, cfg: IConfigs) -> None:
+        from adapters.logging import JsonLogger
         self._impl = JsonLogger(cfg)
 
-    # Делегаты
-    def debug(self, message: str, *, svc: str|None=None, state: str|None=None, event: str|None=None, details: dict|None=None) -> None:
+    def debug(self, message: str, *, svc: Optional[str]=None, state: Optional[str]=None, event: Optional[str]=None, details: Optional[Mapping[str, Any]]=None) -> None:
         self._impl.debug(message, svc=svc, state=state, event=event, details=details)
 
-    def info(self, message: str, *, svc: str|None=None, state: str|None=None, event: str|None=None, details: dict|None=None) -> None:
+    def info(self, message: str, *, svc: Optional[str]=None, state: Optional[str]=None, event: Optional[str]=None, details: Optional[Mapping[str, Any]]=None) -> None:
         self._impl.info(message, svc=svc, state=state, event=event, details=details)
 
-    def warn(self, message: str, *, svc: str|None=None, state: str|None=None, event: str|None=None, details: dict|None=None) -> None:
+    def warn(self, message: str, *, svc: Optional[str]=None, state: Optional[str]=None, event: Optional[str]=None, details: Optional[Mapping[str, Any]]=None) -> None:
         self._impl.warn(message, svc=svc, state=state, event=event, details=details)
 
-    def error(self, message: str, *, svc: str|None=None, state: str|None=None, event: str|None=None, details: dict|None=None) -> None:
+    def error(self, message: str, *, svc: Optional[str]=None, state: Optional[str]=None, event: Optional[str]=None, details: Optional[Mapping[str, Any]]=None) -> None:
         self._impl.error(message, svc=svc, state=state, event=event, details=details)

@@ -7,13 +7,20 @@ def safe_makedirs(path: str, mode: int = 0o755) -> None:
 def atomic_write(path: str, data: bytes, mode: int = 0o644) -> None:
     d = os.path.dirname(path) or "."
     safe_makedirs(d, 0o755)
-    with tempfile.NamedTemporaryFile(dir=d, delete=False) as tmp:
-        tmp.write(data)
-        tmp.flush()
-        os.fsync(tmp.fileno())
-        tmp_path = tmp.name
-    os.chmod(tmp_path, mode)
-    os.replace(tmp_path, path)
+    fd, tmp_path = tempfile.mkstemp(dir=d)
+    try:
+        with os.fdopen(fd, "wb") as f:
+            f.write(data)
+            f.flush()
+            os.fsync(f.fileno())
+        os.chmod(tmp_path, mode)
+        os.replace(tmp_path, path)
+    finally:
+        if os.path.exists(tmp_path):
+            try:
+                os.remove(tmp_path)
+            except Exception:
+                pass
 
 def atomic_write_text(path: str, text: str, mode: int = 0o644, encoding: str = "utf-8") -> None:
     atomic_write(path, text.encode(encoding), mode=mode)

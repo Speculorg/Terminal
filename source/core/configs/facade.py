@@ -1,20 +1,25 @@
 from __future__ import annotations
-from dataclasses import replace
 from typing import Optional
 from .model import Model
-from .loader_env import load_model
-from .hasher import config_hash
+from interfaces import IConfigs
 
-class Configs:
+class Configs(IConfigs):
+    """Единый фасад настроек.
+    Создаётся из готовой модели. Если модель не передана, загрузит через load_env().
+    Хэш берётся из поля model.config_hash (заполняется в loader_env).
+    """
     _instance: Optional["Configs"] = None
 
-    def __init__(self, model: Model):
-        self._model = model
-        self._hash = config_hash(model)
+    def __init__(self, model: Model | None = None) -> None:
+        if model is None:
+            from .loader_env import load_env
+            model = load_env()
+        self._model: Model = model
 
     @classmethod
     def load(cls, env_file_path: str | None = None) -> "Configs":
-        model = load_model(env_file_path)
+        from .loader_env import load_env
+        model = load_env(env_file_path)
         inst = cls(model)
         cls._instance = inst
         return inst
@@ -24,10 +29,10 @@ class Configs:
         return self._model
 
     @property
-    def hash(self) -> str:
-        return self._hash
+    def config_hash(self) -> str:
+        return self.config_hash
 
-    # Проксируем секции как атрибуты фасада
+    # Удобные прокси к секциям модели
     @property
     def global_(self): return self._model.global_
     @property
@@ -52,3 +57,5 @@ class Configs:
     def fsm(self): return self._model.fsm
     @property
     def registrar(self): return self._model.registrar
+    @property
+    def config_hash(self): return self._model.config_hash

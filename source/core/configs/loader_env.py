@@ -5,6 +5,7 @@ from .model import (
     Model, GlobalSection, ContextSection, ConsulSection, VaultSection, TraefikSection,
     LoggingSection, MetricsSection, FSSection, TLSSection, KVSection, FSMSection, RegistrarSection
 )
+from .hasher import ConfigHasher
 
 def _read_env_file(path: str) -> Dict[str, str]:
     data: Dict[str, str] = {}
@@ -52,8 +53,8 @@ def _read_token_file(path: str | None) -> str | None:
     except FileNotFoundError:
         return None
 
-def load_model() -> Tuple[Model, Dict[str, str]]:
-    file_path = _pick_configs_env_path()
+def load_model(env_file_path: str | None = None) -> Tuple[Model, Dict[str, str]]:
+    file_path = env_file_path or _pick_configs_env_path()
     file_env = _read_env_file(file_path) if file_path else {}
     merged = _overlay(file_env, dict(os.environ))
 
@@ -127,7 +128,7 @@ def load_model() -> Tuple[Model, Dict[str, str]]:
         state_securing_timeout_ms=int(merged.get("FSM_STATE_SECURING_TIMEOUT_MS", "10000") or "10000"),
         state_tls_transition_timeout_ms=int(merged.get("FSM_STATE_TLS_TRANSITION_TIMEOUT_MS", "5000") or "5000"),
         state_registering_timeout_ms=int(merged.get("FSM_STATE_REGISTERING_TIMEOUT_MS", "5000") or "5000"),
-        state_running_tick_timeout_ms=int(merged.get("FSM_STATE_RUNNING_TICK_TIMEOUT_MS", "5000") or "5000"),
+        state_running_tick_timeout_ms=int(merged.get("FSM_STATE_RUNNING_TICK_TIMEOUT_MS", "1000") or "1000"),
         state_publish_min_interval_ms=int(merged.get("FSM_STATE_PUBLISH_MIN_INTERVAL_MS", "5000") or "5000"),
         degraded_recovery_window_ms=int(merged.get("FSM_DEGRADED_RECOVERY_WINDOW_MS", "60000") or "60000"),
         degraded_transition_window_ms=int(merged.get("FSM_DEGRADED_TRANSITION_WINDOW_MS", "30000") or "30000"),
@@ -142,6 +143,8 @@ def load_model() -> Tuple[Model, Dict[str, str]]:
         max_rereg_attempts_per_window=int(merged.get("REGISTRAR_MAX_REREG_ATTEMPTS_PER_WINDOW", "5") or "5"),
     )
 
+    config_hash = ConfigHasher.calc(merged)
+    
     model = Model(
         global_=global_,
         context=context,
@@ -155,5 +158,10 @@ def load_model() -> Tuple[Model, Dict[str, str]]:
         kv=kv,
         fsm=fsm,
         registrar=registrar,
+        config_hash=config_hash,
     )
     return model, merged
+
+def load_env(env_file_path: str | None = None) -> Model:
+    model, _ = load_model(env_file_path)
+    return model
