@@ -23,9 +23,9 @@ class MarkersStore:
         remove(self.path_for(svc, name))
 
     def list(self, svc: str) -> list[str]:
-        d = self._paths.svc_markers_dir(svc)
+        d = self._paths.markers_dir_path()
         files = listdir(d)
-        return [f[:-5] for f in files if f.endswith(".done")]
+        return [f for f in files if f.startswith(f"{svc}_") and f.endswith(".done")]
 
     def require(self, required: set[str], svc: str) -> tuple[bool, set[str]]:
         have = set(self.list(svc))

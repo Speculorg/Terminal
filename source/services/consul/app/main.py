@@ -7,11 +7,11 @@ from entities.state_enum import StateEnum
 
 @dataclass(frozen=True)
 class ConsulRunProfile(IRunProfile):
-    required_markers: set[str] = field(default_factory=lambda: {'bootstrap.done','tokens.done'})
-    stage_gates: dict = field(default_factory=lambda: {
-        StateEnum.SECURING: [('vault','init'), ('certs','initial_pem')],
-        StateEnum.REGISTERING: [('consul','tokens'), ('certs','initial_pem')],
-    })
+    required_markers = { "consul_bootstrap.done", "consul_tokens.done" }
+    stage_gates = {
+        StateEnum.SECURING: { "vault_init.done", "vault_initial_pem.done" },
+        StateEnum.REGISTERING: { "consul_tokens.done", "vault_initial_pem.done" },
+    }
 
 class ConsulService(BaseService):
     def __init__(self) -> None:

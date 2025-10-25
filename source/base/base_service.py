@@ -36,22 +36,22 @@ class BaseService(IService):
 
     def _build_deps(self) -> BaseDeps:
         from core.configs import Configs
-        from adapters.logging import JsonLogger
-        from adapters.metrics import PrometheusMetrics
         from core.net import Net
         from core.fs import FS
         from core.markers import Markers
         from core.kv import KV
-        from adapters.kv import ConsulKV
         from core.registrar import Registrar
-        from adapters.registrar import ConsulRegistrar
         from core.tls import TLSReloader, TLSWatch, TLSProbe
         from core.fsm import FSM
         from core.logging import Logger
+        from adapters.logging import JsonLogger
+        from adapters.metrics import PromMetrics
+        from adapters.registrar import ConsulRegistrar
+        from adapters.kv import ConsulKV
 
         cfg = Configs()
         logger = Logger(cfg)
-        metrics = PrometheusMetrics()
+        metrics = PromMetrics()
         try:
             metrics.start_http_exporter(host=str(cfg.metrics.host), port=int(cfg.metrics.port), path=cfg.metrics.path)
         except Exception:
@@ -60,7 +60,7 @@ class BaseService(IService):
         net = Net(cfg)
         fs = FS(cfg)
         markers = Markers(cfg, fs=fs)
-        kv = KV(ConsulKV(cfg), svc=cfg.context.name)
+        kv = KV(cfg, ConsulKV(cfg))
         registrar = Registrar(cfg, logger=logger, client=ConsulRegistrar(cfg, logger))
         tls_reloader = TLSReloader(cfg, logger)
         tls_watch = TLSWatch(cfg, logger, fs)
@@ -98,7 +98,8 @@ class BaseService(IService):
 
         try:
             metrics.set_health_path("/health")
-            metrics.set_health_provider(lambda: (lambda snap=self._health.snapshot(): dict(snap, svc=cfg.context.name, version=cfg.global_.version))())
+            metrics.start_http_exporter()
+            metrics.health_provider(lambda: (lambda snap=self._health.snapshot(): dict(snap, svc=cfg.context.name, version=cfg.global_.version))())
         except Exception:
             pass
 
@@ -118,8 +119,12 @@ class BaseService(IService):
             fsm=fsm
         )
 
+
     def initialize(self) -> None:
-        self._logger.info("service.init", svc=self._cfg.context.name, version=self._cfg.global_.version)
+        if hasattr(self._fs, "ensure_layout"):
+            self._fs.ensure_layout()
+        self._logger.info("service.init", svc=self._cfg.context.name, details={"version": self._cfg.global_.version})
+
 
     def start(self) -> None:
         if hasattr(self._fsm, "required_markers"):

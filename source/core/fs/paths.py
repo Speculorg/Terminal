@@ -1,27 +1,51 @@
+# -*- coding: utf-8 -*-
 from __future__ import annotations
 from dataclasses import dataclass
 
+# Внимание: никаких хардкодов путей. Всё берём из Configs.fs.*
+
 @dataclass(frozen=True)
 class Paths:
-    """Справочник путей локального тома согласно плану.
-    Маркеры всегда в `fs/markers`. Секреты и сертификаты берутся из cfg.
-    """
-    fs_root: str = "fs"
-    markers_dir: str = "fs/markers"
-    secrets_dir: str = "fs/secrets"
-    certs_dir: str = "fs/certs"
-    tmp_dir: str = "fs/tmp"
+    markers_dir: str
+    certs_dir: str
+    secrets_dir: str
+    tmp_dir: str
 
-    def ensure_relative(self, path: str) -> str:
-        if not path:
-            return self.fs_root
-        if path.startswith("/"):
-            raise ValueError("absolute paths are not allowed")
-        return path
+    @classmethod
+    def from_cfg(cls, cfg) -> "Paths":
+        fs = cfg.fs
+        return cls(
+            markers_dir=fs.markers_dir,
+            certs_dir=fs.certs_dir,
+            secrets_dir=fs.secrets_dir,
+            tmp_dir=fs.tmp_dir,
+        )
 
-    # --- markers ---
-    def svc_markers_dir(self, svc: str) -> str:
-        return f"{self.markers_dir}/{svc}"
+    # Маркерный файл (плоское имя: <svc>_<name>.done)
+    def marker_file(self, name: str) -> str:
+        return f"{self.markers_dir}/{name}"
 
-    def marker_file(self, svc: str, name: str) -> str:
-        return f"{self.svc_markers_dir(svc)}/{name}.done"
+    # Секрет
+    def secret_file(self, name: str) -> str:
+        return f"{self.secrets_dir}/{name}"
+
+    # Временный файл
+    def tmp_file(self, name: str) -> str:
+        return f"{self.tmp_dir}/{name}"
+
+    # Типовые PEM пути
+    @property
+    def pem_privkey(self) -> str:
+        return f"{self.certs_dir}/privkey.pem"
+
+    @property
+    def pem_cert(self) -> str:
+        return f"{self.certs_dir}/cert.pem"
+
+    @property
+    def pem_fullchain(self) -> str:
+        return f"{self.certs_dir}/fullchain.pem"
+
+    @property
+    def pem_ca(self) -> str:
+        return f"{self.certs_dir}/ca.crt"

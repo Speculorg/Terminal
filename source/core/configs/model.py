@@ -50,8 +50,10 @@ class MetricsSection:
 
 @dataclass(frozen=True)
 class FSSection:
-    certs_dir: str = "/certs"
-    secrets_dir: str = "/secrets"
+    markers_dir: str = "/fs/terminal/markers"
+    secrets_dir: str = "/fs/terminal/secrets"
+    certs_dir: str = "/fs/terminal/certs"
+    tmp_dir: str = "/fs/terminal/tmp"
 
 @dataclass(frozen=True)
 class TLSSection:

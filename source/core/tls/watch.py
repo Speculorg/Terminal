@@ -28,7 +28,8 @@ class TLSWatch:
 
         def worker():
             nonlocal last_mtime, last_fire_ts
-            self.logger.info("tls.watch.start", svc=self.cfg.context.name, files=len(paths))
+            self.logger.info("tls.watch.start", svc=self.cfg.context.name, details={"files": len(paths)})
+
             while not self._stop:
                 changed = False
                 for p in paths:

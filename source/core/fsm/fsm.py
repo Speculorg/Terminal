@@ -34,6 +34,17 @@ class FSM:
         self._last_publish_ts: int = 0
 
     def on_enter(self, state: StateEnum) -> None:
+        # enforce stage gates before state switch
+        gates = list(self.stage_gates.get(state, [])) if isinstance(self.stage_gates, dict) else []
+        if gates:
+            missing_all = []
+            for svc, name in gates:
+                ok, missing = self.markers.require({name}, svc=svc)
+                if not ok:
+                    missing_all.extend([f"{svc}/{m}" for m in sorted(missing)])
+            if missing_all:
+                self.logger.error("fsm.gate_blocked", svc=self.svc or self.cfg.context.name, state=state.name, details={"missing": missing_all})
+                raise RuntimeError(f"stage gates not satisfied: {missing_all}")
         now = int(time.time())
         self.ctx.previous = self.ctx.current
         self.ctx.current = state
@@ -67,6 +78,9 @@ class FSM:
             return False
 
     def _publish_state(self) -> None:
+        # publish to KV only in RUNNING
+        if self.ctx.current != StateEnum.RUNNING:
+            return
         now_ms = int(time.time() * 1000)
         min_interval = int(self.cfg.fsm.state_publish_min_interval_ms)
         if now_ms - self._last_publish_ts < min_interval:
@@ -127,3 +141,22 @@ class FSM:
         except Exception:
             pass
         self.on_enter(StateEnum.STOPPED)
+
+    def run(self) -> None:
+        """TERM-1: неблокирующий запуск цикла FSM для сервиса.
+        Выполняет стартовые переходы и один тик публикации/heartbeat.
+        Поведение блокирующего цикла не требуется на уровне каркаса.
+        """
+        try:
+            self.start()
+            self.tick()
+        except Exception as e:
+            # Перевод в ERROR при фатальной ошибке запуска
+            try:
+                self.on_enter(StateEnum.ERROR)
+            except Exception:
+                pass
+            try:
+                self.logger.error('fsm.run.error', svc=self.svc or self.cfg.context.name, event='fsm.run', details={'exc': type(e).__name__})
+            except Exception:
+                pass

@@ -64,10 +64,7 @@ services:
       - ./source/services/consul/app:/app:ro
       # данные и слой fs/*
       - consul_data:/consul/data
-      - fs:/certs
-      - fs:/markers
-      - fs:/secrets
-      - fs:/tmp
+      - fs:/fs/terminal
     networks:
       - net_private
     ports:
@@ -109,10 +106,7 @@ services:
       - ./source/services/vault/app:/app:ro
       - ./source/services/vault/config:/config:rw
       - vault_data:/vault/file
-      - fs:/certs
-      - fs:/markers
-      - fs:/secrets
-      - fs:/tmp
+      - fs:/fs/terminal
     networks:
       - net_private
     ports:
@@ -150,10 +144,7 @@ services:
       - ./source/adapters:/adapters:ro
       - ./source/services/traefik/app:/app:ro
       - ./source/services/traefik/config:/config:rw
-      - fs:/certs
-      - fs:/markers
-      - fs:/secrets
-      - fs:/tmp
+      - fs:/fs/terminal
     networks:
       - net_private
       - net_public

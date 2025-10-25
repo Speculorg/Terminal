@@ -7,12 +7,12 @@ from entities.state_enum import StateEnum
 
 @dataclass(frozen=True)
 class VaultRunProfile(IRunProfile):
-    required_markers: set[str] = field(default_factory=lambda: {'init.done','unseal.done','pki.done'})
-    stage_gates: dict = field(default_factory=lambda: {
-        StateEnum.STARTING: [('consul','tokens')],
-        StateEnum.SECURING: [('vault','pki'), ('certs','initial_pem')],
-        StateEnum.REGISTERING: [('vault','pki'), ('certs','initial_pem')],
-    })
+    required_markers = { "vault_init.done", "vault_unseal.done", "vault_pki.done" }
+    stage_gates = {
+        StateEnum.STARTING: { "consul_tokens.done" },
+        StateEnum.SECURING: { "vault_pki.done", "vault_initial_pem.done" },
+        StateEnum.REGISTERING: { "vault_pki.done", "vault_initial_pem.done" },
+    }
 
 class VaultService(BaseService):
     def __init__(self) -> None:

@@ -59,7 +59,7 @@ class BaseFSM(IFSM):
     def _state_index(self) -> int:
         order = [
             StateEnum.STARTING, StateEnum.BOOTSTRAPPING, StateEnum.INITIALIZING,
-            StateEnum.SECURING, StateEnum.TLS_TRANSITION, StateEnum.REGISTERING,
+            StateEnum.SECURING, StateEnum.TLS_TRANSITIONRANSITION, StateEnum.REGISTERING,
             StateEnum.RUNNING, StateEnum.PAUSED, StateEnum.DEGRADED, StateEnum.ERROR,
             StateEnum.STOPPING, StateEnum.STOPPED,
         ]

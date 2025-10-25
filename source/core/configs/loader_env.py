@@ -105,8 +105,10 @@ def load_model(env_file_path: str | None = None) -> Tuple[Model, Dict[str, str]]
     )
 
     fs = FSSection(
-        certs_dir=merged.get("FS_CERTS_DIR", "/certs"),
-        secrets_dir=merged.get("FS_SECRETS_DIR", "/secrets"),
+        markers_dir=merged.get("FS_MARKERS_DIR", "/fs/terminal/markers"),
+        secrets_dir=merged.get("FS_SECRETS_DIR", "/fs/terminal/secrets"),
+        certs_dir=merged.get("FS_CERTS_DIR", "/fs/terminal/certs"),
+        tmp_dir=merged.get("FS_TMP_DIR", "/fs/terminal/tmp"),
     )
 
     tls = TLSSection(

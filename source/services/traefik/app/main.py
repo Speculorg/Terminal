@@ -7,11 +7,11 @@ from entities.state_enum import StateEnum
 
 @dataclass(frozen=True)
 class TraefikRunProfile(IRunProfile):
-    required_markers: set[str] = field(default_factory=lambda: {'initial_pem.done'})
-    stage_gates: dict = field(default_factory=lambda: {
-        StateEnum.SECURING: [('consul','tokens'), ('certs','initial_pem')],
-        StateEnum.REGISTERING: [('consul','tokens'), ('certs','initial_pem')],
-    })
+    required_markers = None
+    stage_gates = {
+        StateEnum.SECURING: { "consul_tokens.done", "vault_initial_pem.done" },
+        StateEnum.REGISTERING: { "consul_tokens.done", "vault_initial_pem.done" }
+    }
 
 class TraefikService(BaseService):
     def __init__(self) -> None:

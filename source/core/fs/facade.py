@@ -13,18 +13,12 @@ from .temp_store import TempStore
 class FS(IFS):
     def __init__(self, cfg=None) -> None:
         # Инициализация путей на основе cfg.fs при наличии, иначе дефолты
-        p = Paths()
-        if cfg is not None and getattr(cfg, "fs", None) is not None:
-            try:
-                p = Paths(
-                    fs_root="fs",
-                    markers_dir=str(cfg.fs.markers_dir),
-                    secrets_dir=str(cfg.fs.secrets_dir),
-                    certs_dir=str(cfg.fs.certs_dir),
-                    tmp_dir=str(cfg.fs.tmp_dir),
-                )
-            except Exception:
-                pass
+        p = Paths(
+            markers_dir=str(cfg.fs.markers_dir),
+            secrets_dir=str(cfg.fs.secrets_dir),
+            certs_dir=str(cfg.fs.certs_dir),
+            tmp_dir=str(cfg.fs.tmp_dir),
+        )
         self.paths = p
         # Подфасады
         self.secrets = SecretsStore(self.paths.secrets_dir)
@@ -33,6 +27,14 @@ class FS(IFS):
         self.markers = MarkersStore(self.paths)
 
     # --- базовые операции ---
+
+    def ensure_layout(self) -> None:
+        """Создаёт каталоги fs/terminal/*, если их ещё нет."""
+        safe_makedirs(self.paths.markers_dir, 0o755)
+        safe_makedirs(self.paths.certs_dir,   0o750)
+        safe_makedirs(self.paths.secrets_dir, 0o700)
+        safe_makedirs(self.paths.tmp_dir,     0o700)
+
     def exists(self, path: str) -> bool:
         return os.path.exists(self.paths.ensure_relative(path))
 
