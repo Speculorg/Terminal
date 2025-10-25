@@ -1,38 +1,17 @@
 from __future__ import annotations
-from typing import Optional
 from .model import Model
+
 from interfaces import IConfigs
 
+
 class Configs(IConfigs):
-    """Единый фасад настроек.
-    Создаётся из готовой модели. Если модель не передана, загрузит через load_env().
-    Хэш берётся из поля model.config_hash (заполняется в loader_env).
+    """Единый фасад настроек. Принимает готовую модель.
     """
-    _instance: Optional["Configs"] = None
+    def __init__(self, model: Model) -> None:
+        self._model = model
 
-    def __init__(self, model: Model | None = None) -> None:
-        if model is None:
-            from .loader_env import load_env
-            model = load_env()
-        self._model: Model = model
 
-    @classmethod
-    def load(cls, env_file_path: str | None = None) -> "Configs":
-        from .loader_env import load_env
-        model = load_env(env_file_path)
-        inst = cls(model)
-        cls._instance = inst
-        return inst
-
-    @property
-    def model(self) -> Model:
-        return self._model
-
-    @property
-    def config_hash(self) -> str:
-        return self.config_hash
-
-    # Удобные прокси к секциям модели
+    # Секции
     @property
     def global_(self): return self._model.global_
     @property
@@ -57,5 +36,12 @@ class Configs(IConfigs):
     def fsm(self): return self._model.fsm
     @property
     def registrar(self): return self._model.registrar
+
+
+    # Алиасы
     @property
-    def config_hash(self): return self._model.config_hash
+    def version(self) -> str: return self._model.global_.version
+    @property
+    def domain_root(self) -> str: return self._model.global_.domain_root
+    @property
+    def config_hash(self) -> str: return self._model.config_hash

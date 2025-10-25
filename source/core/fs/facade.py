@@ -1,7 +1,9 @@
 from __future__ import annotations
 import os
 from typing import Callable
+
 from interfaces.i_fs import IFS, IWatcher
+
 from .paths import Paths
 from .ops import safe_makedirs, listdir as _ls, remove as _rm
 from .watcher import _Watcher
@@ -10,31 +12,23 @@ from .certs_store import CertsStore
 from .markers_store import MarkersStore
 from .temp_store import TempStore
 
+
 class FS(IFS):
     def __init__(self, cfg=None) -> None:
-        # Инициализация путей на основе cfg.fs при наличии, иначе дефолты
-        p = Paths(
+        self.paths  = Paths(
             markers_dir=str(cfg.fs.markers_dir),
             secrets_dir=str(cfg.fs.secrets_dir),
             certs_dir=str(cfg.fs.certs_dir),
             tmp_dir=str(cfg.fs.tmp_dir),
         )
-        self.paths = p
-        # Подфасады
+
+        self.markers = MarkersStore(self.paths.markers_dir)
         self.secrets = SecretsStore(self.paths.secrets_dir)
         self.certs = CertsStore(self.paths.certs_dir)
         self.temp = TempStore(self.paths.tmp_dir)
-        self.markers = MarkersStore(self.paths)
+
 
     # --- базовые операции ---
-
-    def ensure_layout(self) -> None:
-        """Создаёт каталоги fs/terminal/*, если их ещё нет."""
-        safe_makedirs(self.paths.markers_dir, 0o755)
-        safe_makedirs(self.paths.certs_dir,   0o750)
-        safe_makedirs(self.paths.secrets_dir, 0o700)
-        safe_makedirs(self.paths.tmp_dir,     0o700)
-
     def exists(self, path: str) -> bool:
         return os.path.exists(self.paths.ensure_relative(path))
 
@@ -44,8 +38,9 @@ class FS(IFS):
     def remove(self, path: str) -> None:
         _rm(self.paths.ensure_relative(path))
 
-    def makedirs(self, path: str, mode: int = 0o755) -> None:
-        safe_makedirs(self.paths.ensure_relative(path), mode)
+    def makedir(path: str, mode: int = 0o755) -> None:
+        safe_makedirs(path, mode=mode, exist_ok=True)
+
 
     # --- атомарные чтение/запись ---
     def atomic_write(self, path: str, data, mode: int = 0o644) -> None:
@@ -63,6 +58,7 @@ class FS(IFS):
     def atomic_read_text(self, path: str, encoding: str = "utf-8") -> str:
         from .ops import atomic_read_text as _art
         return _art(self.paths.ensure_relative(path), encoding=encoding)
+
 
     # --- watcher ---
     def start_file_watch(self, paths: list[str], on_change: Callable[[list[str]], None], poll_interval_ms: int) -> "IWatcher":

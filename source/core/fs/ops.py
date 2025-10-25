@@ -1,8 +1,18 @@
 from __future__ import annotations
 import os, tempfile
 
+
 def safe_makedirs(path: str, mode: int = 0o755) -> None:
     os.makedirs(path, mode=mode, exist_ok=True)
+
+
+def ensure_layout(self) -> None:
+    """Создаёт каталоги fs/terminal/*, если их ещё нет."""
+    safe_makedirs(self.markers_dir, 0o755)
+    safe_makedirs(self.secrets_dir, 0o700)
+    safe_makedirs(self.certs_dir,   0o750)
+    safe_makedirs(self.tmp_dir,     0o700)
+
 
 def atomic_write(path: str, data: bytes, mode: int = 0o644) -> None:
     d = os.path.dirname(path) or "."
@@ -22,21 +32,26 @@ def atomic_write(path: str, data: bytes, mode: int = 0o644) -> None:
             except Exception:
                 pass
 
+
 def atomic_write_text(path: str, text: str, mode: int = 0o644, encoding: str = "utf-8") -> None:
     atomic_write(path, text.encode(encoding), mode=mode)
+
 
 def atomic_read(path: str) -> bytes:
     with open(path, "rb") as f:
         return f.read()
 
+
 def atomic_read_text(path: str, encoding: str = "utf-8") -> str:
     return atomic_read(path).decode(encoding)
+
 
 def listdir(path: str) -> list[str]:
     try:
         return sorted(os.listdir(path))
     except FileNotFoundError:
         return []
+
 
 def remove(path: str) -> None:
     try:

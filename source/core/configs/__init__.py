@@ -1,5 +1,5 @@
-"""
-Configs v2: типобезопасный фасад и автозагрузка.
-"""
 from .facade import Configs
-__all__ = ["Configs"]
+from .loader_env import load_model
+
+
+__all__ = ["Configs", "load_model"]

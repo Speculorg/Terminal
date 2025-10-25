@@ -1,11 +1,13 @@
 from __future__ import annotations
 import os
-from typing import Dict, Tuple
+from typing import Dict, Tuple, List, Optional
+from hashlib import sha256
+
 from .model import (
     Model, GlobalSection, ContextSection, ConsulSection, VaultSection, TraefikSection,
     LoggingSection, MetricsSection, FSSection, TLSSection, KVSection, FSMSection, RegistrarSection
 )
-from .hasher import ConfigHasher
+
 
 def _read_env_file(path: str) -> Dict[str, str]:
     data: Dict[str, str] = {}
@@ -23,40 +25,43 @@ def _read_env_file(path: str) -> Dict[str, str]:
         pass
     return data
 
-def _overlay(base_env: Dict[str, str], over_env: Dict[str, str]) -> Dict[str, str]:
-    merged = dict(base_env)
-    for k, v in over_env.items():
-        merged[k] = str(v)
+
+def _merge_env(file_env: Dict[str, str]) -> Dict[str, str]:
+    merged = dict(file_env)
+    merged.update({k: v for k, v in os.environ.items()})
     return merged
 
-def _pick_configs_env_path() -> str | None:
-    p = os.environ.get("CONFIGS_ENV_PATH")
-    if p and os.path.isfile(p):
-        return p
-    # стандартные места
-    for candidate in ("/config/configs.env", "./configs.env", "/app/configs.env"):
-        if os.path.isfile(candidate):
-            return candidate
-    return None
 
-def _parse_tags(raw: str | None) -> list[str]:
+def _parse_tags(raw: Optional[str]) -> List[str]:
     if not raw:
         return []
     return [t.strip() for t in raw.split(",") if t.strip()]
 
-def _read_token_file(path: str | None) -> str | None:
+
+def _read_token_file(path: Optional[str]) -> Optional[str]:
     if not path:
         return None
     try:
         with open(path, "r", encoding="utf-8") as f:
-            return f.read().strip()
+            return f.read().strip() or None
     except FileNotFoundError:
         return None
 
+
+def _config_hash_by_sections(sections: Dict[str, Dict[str, str]]) -> str:
+    # детерминированный хэш: сортировка ключей секций и ключей полей
+    parts: List[str] = []
+    for s_name in sorted(sections.keys()):
+        fields = sections[s_name]
+        for k in sorted(fields.keys()):
+            parts.append(f"{s_name}.{k}={fields[k]}\n")
+    return sha256("".join(parts).encode("utf-8")).hexdigest()
+
+
 def load_model(env_file_path: str | None = None) -> Tuple[Model, Dict[str, str]]:
-    file_path = env_file_path or _pick_configs_env_path()
-    file_env = _read_env_file(file_path) if file_path else {}
-    merged = _overlay(file_env, dict(os.environ))
+    env_path = env_file_path or os.getenv("CONFIGS_ENV_PATH") or "./configs.env"
+    file_env = _read_env_file(env_path)
+    merged = _merge_env(file_env)
 
     global_ = GlobalSection(
         domain_root=merged.get("GLOBAL_DOMAIN_ROOT", "terminal.local"),
@@ -94,7 +99,7 @@ def load_model(env_file_path: str | None = None) -> Tuple[Model, Dict[str, str]]
     logging = LoggingSection(
         level=merged.get("LOGGING_LEVEL", "INFO"),
         correlation_id_header=merged.get("LOGGING_CORRELATION_ID_HEADER", "X-Request-ID"),
-        generate_correlation_if_missing=merged.get("LOGGING_GENERATE_CORRELATION_IF_MISSING", "true").lower() == "true",
+        generate_correlation_if_missing=merged.get("LOGGING_GENERATE_CORRELATION_IF_MISSING", "true").lower()=="true",
         correlation_id_len_max=int(merged.get("LOGGING_CORRELATION_ID_LEN_MAX", "64") or "64"),
     )
 
@@ -113,20 +118,20 @@ def load_model(env_file_path: str | None = None) -> Tuple[Model, Dict[str, str]]
 
     tls = TLSSection(
         certs_rotate_hours=int(merged.get("TLS_CERTS_ROTATE_HOURS", "168") or "168"),
-        reloader_strategy=merged.get("TLS_RELOADER_STRATEGY", "SSL_CTX"),
+        reloader_strategy=merged.get("TLS_RELOADER_STRATEGY", "NONE"),
         watch_debounce_ms=int(merged.get("TLS_WATCH_DEBOUNCE_MS", "300") or "300"),
         watch_poll_interval_ms=int(merged.get("TLS_WATCH_POLL_INTERVAL_MS", "500") or "500"),
     )
 
     kv = KVSection(
         cas_backoff_factor=int(merged.get("KV_CAS_BACKOFF_FACTOR", "2") or "2"),
-        cas_max_retries=int(merged.get("KV_CAS_MAX_RETRIES", "5") or "5"),
-        request_timeout_ms=int(merged.get("KV_REQUEST_TIMEOUT_MS", "5000") or "5000"),
+        cas_max_retries=int(merged.get("KV_CAS_RETRIES", "4") or "4"),
+        request_timeout_ms=int(merged.get("KV_REQUEST_TIMEOUT_MS", "3000") or "3000"),
     )
 
     fsm = FSMSection(
         state_bootstrapping_timeout_ms=int(merged.get("FSM_STATE_BOOTSTRAPPING_TIMEOUT_MS", "5000") or "5000"),
-        state_initializing_timeout_ms=int(merged.get("FSM_STATE_INITIALIZING_TIMEOUT_MS", "15000") or "15000"),
+        state_initializing_timeout_ms=int(merged.get("FSM_STATE_INITIALIZING_TIMEOUT_MS", "5000") or "5000"),
         state_securing_timeout_ms=int(merged.get("FSM_STATE_SECURING_TIMEOUT_MS", "10000") or "10000"),
         state_tls_transition_timeout_ms=int(merged.get("FSM_STATE_TLS_TRANSITION_TIMEOUT_MS", "5000") or "5000"),
         state_registering_timeout_ms=int(merged.get("FSM_STATE_REGISTERING_TIMEOUT_MS", "5000") or "5000"),
@@ -145,8 +150,24 @@ def load_model(env_file_path: str | None = None) -> Tuple[Model, Dict[str, str]]
         max_rereg_attempts_per_window=int(merged.get("REGISTRAR_MAX_REREG_ATTEMPTS_PER_WINDOW", "5") or "5"),
     )
 
-    config_hash = ConfigHasher.calc(merged)
-    
+    # Ключевые секции для хэша
+    sections_for_hash: Dict[str, Dict[str, str]] = {
+        "global": {"domain_root": global_.domain_root, "version": global_.version},
+        "consul": {"host": consul.host, "http_port": str(consul.http_port), "https_port": str(consul.https_port)},
+        "vault": {"host": vault.host, "http_port": str(vault.http_port), "https_port": str(vault.https_port)},
+        "traefik": {"host": traefik.host, "http_port": str(traefik.http_port), "https_port": str(traefik.https_port)},
+        "logging": {"level": logging.level, "correlation_id_header": logging.correlation_id_header, "generate_correlation_if_missing": str(logging.generate_correlation_if_missing), "correlation_id_len_max": str(logging.correlation_id_len_max)},
+        "metrics": {"host": metrics.host, "port": str(metrics.port), "path": metrics.path},
+        "fs": {"markers_dir": fs.markers_dir, "certs_dir": fs.certs_dir, "secrets_dir": fs.secrets_dir, "tmp_dir": fs.tmp_dir},
+        "tls": {"certs_rotate_hours": str(tls.certs_rotate_hours), "reloader_strategy": tls.reloader_strategy, "watch_debounce_ms": str(tls.watch_debounce_ms), "watch_poll_interval_ms": str(tls.watch_poll_interval_ms)},
+        "kv": {"cas_backoff_factor": str(kv.cas_backoff_factor), "cas_max_retries": str(kv.cas_max_retries), "request_timeout_ms": str(kv.request_timeout_ms)},
+        "fsm": {"state_bootstrapping_timeout_ms": str(fsm.state_bootstrapping_timeout_ms), "state_initializing_timeout_ms": str(fsm.state_initializing_timeout_ms), "state_securing_timeout_ms": str(fsm.state_securing_timeout_ms), "state_tls_transition_timeout_ms": str(fsm.state_tls_transition_timeout_ms), "state_registering_timeout_ms": str(fsm.state_registering_timeout_ms), "state_running_tick_timeout_ms": str(fsm.state_running_tick_timeout_ms), "state_publish_min_interval_ms": str(fsm.state_publish_min_interval_ms), "degraded_recovery_window_ms": str(fsm.degraded_recovery_window_ms), "degraded_transition_window_ms": str(fsm.degraded_transition_window_ms), "degraded_min_duration_ms": str(fsm.degraded_min_duration_ms)},
+        "registrar": {"deregister_critical_service_after_sec": str(registrar.deregister_critical_service_after_sec), "heartbeat_period_sec": str(registrar.heartbeat_period_sec), "ttl_sec": str(registrar.ttl_sec), "reregistration_cooldown_sec": str(registrar.reregistration_cooldown_sec), "max_rereg_attempts_per_window": str(registrar.max_rereg_attempts_per_window)},
+    }
+
+    # вычислим хэш
+    config_hash = _config_hash_by_sections(sections_for_hash)
+
     model = Model(
         global_=global_,
         context=context,

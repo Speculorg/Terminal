@@ -2,6 +2,7 @@ from __future__ import annotations
 from .ops import atomic_read, atomic_read_text, atomic_write, atomic_write_text, safe_makedirs
 
 class SecretsStore:
+    
     def __init__(self, secrets_dir: str) -> None:
         self._root = secrets_dir
 

@@ -2,10 +2,12 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import List, Optional
 
+
 @dataclass(frozen=True)
 class GlobalSection:
     domain_root: str = "terminal.local"
     version: str = "0.0.0-dev"
+
 
 @dataclass(frozen=True)
 class ContextSection:
@@ -14,11 +16,13 @@ class ContextSection:
     tags: List[str] = field(default_factory=list)
     consul_token: Optional[str] = None
 
+
 @dataclass(frozen=True)
 class ConsulSection:
     host: str = "consul"
     http_port: int = 8500
     https_port: int = 8501
+
 
 @dataclass(frozen=True)
 class VaultSection:
@@ -29,11 +33,13 @@ class VaultSection:
     pki_int_path: str = "pki-int"
     pki_role: str = "terminal-leaf"
 
+
 @dataclass(frozen=True)
 class TraefikSection:
     host: str = "traefik"
     http_port: int = 8080
     https_port: int = 8443
+
 
 @dataclass(frozen=True)
 class LoggingSection:
@@ -42,11 +48,13 @@ class LoggingSection:
     generate_correlation_if_missing: bool = True
     correlation_id_len_max: int = 64
 
+
 @dataclass(frozen=True)
 class MetricsSection:
     host: str = "0.0.0.0"
     path: str = "/metrics"
     port: int = 8000
+
 
 @dataclass(frozen=True)
 class FSSection:
@@ -55,23 +63,26 @@ class FSSection:
     certs_dir: str = "/fs/terminal/certs"
     tmp_dir: str = "/fs/terminal/tmp"
 
+
 @dataclass(frozen=True)
 class TLSSection:
     certs_rotate_hours: int = 168
-    reloader_strategy: str = "SSL_CTX"
+    reloader_strategy: str = "NONE"
     watch_debounce_ms: int = 300
     watch_poll_interval_ms: int = 500
+
 
 @dataclass(frozen=True)
 class KVSection:
     cas_backoff_factor: int = 2
-    cas_max_retries: int = 5
-    request_timeout_ms: int = 5000
+    cas_max_retries: int = 4
+    request_timeout_ms: int = 3000
+
 
 @dataclass(frozen=True)
 class FSMSection:
     state_bootstrapping_timeout_ms: int = 5000
-    state_initializing_timeout_ms: int = 15000
+    state_initializing_timeout_ms: int = 5000
     state_securing_timeout_ms: int = 10000
     state_tls_transition_timeout_ms: int = 5000
     state_registering_timeout_ms: int = 5000
@@ -81,6 +92,7 @@ class FSMSection:
     degraded_transition_window_ms: int = 30000
     degraded_min_duration_ms: int = 5000
 
+
 @dataclass(frozen=True)
 class RegistrarSection:
     ttl_sec: int = 15
@@ -88,6 +100,7 @@ class RegistrarSection:
     deregister_critical_service_after_sec: int = 45
     reregistration_cooldown_sec: int = 15
     max_rereg_attempts_per_window: int = 5
+
 
 @dataclass(frozen=True)
 class Model:
