@@ -5,8 +5,9 @@ from .tls_policy import TLSPolicy
 from .registrar_policy import RegistrarPolicy
 from .health_policy import HealthPolicy
 from .kv_policy import KVPolicy
-
+from .daemon_policy import DaemonPolicy
 from .fs_policy import FSPolicy
+
 
 __all__ = [
     'PoliciesFactory',
@@ -17,4 +18,5 @@ __all__ = [
     'HealthPolicy',
     'KVPolicy',
     'FSPolicy',
+    'DaemonPolicy',
 ]

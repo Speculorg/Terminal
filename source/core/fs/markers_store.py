@@ -42,3 +42,16 @@ class MarkersStore:
         have = set(self.list(svc))
         missing = required - have
         return (len(missing) == 0, missing)
+
+    def list_all(self) -> list[str]:
+        try:
+            files = os.listdir(self._dir())
+        except FileNotFoundError:
+            files = []
+        return [f for f in files if f.endswith(".done") and _VALID.match(f)]
+
+    def exists(self, marker_name: str) -> bool:
+        try:
+            return marker_name in set(self.list_all())
+        except Exception:
+            return False

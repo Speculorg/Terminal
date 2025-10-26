@@ -1,57 +1,50 @@
 from __future__ import annotations
-import socket
-import ssl
-import time
-import http.client
-import urllib.parse
+import http.client, ssl, urllib.parse
 from typing import Tuple, Optional
-
 from interfaces import IConfigs
+from .port import wait_port as _wait_port
 
 class Net:
-    """Сетевые утилиты и пробы. Таймауты берём из cfg.fsm.* или передаём явно."""
+    """Сетевые операции. Все таймауты берём из cfg при отсутствии явных значений."""
     def __init__(self, cfg: IConfigs) -> None:
         self._cfg = cfg
 
-    # --- низкоуровневые проверки портов ---
-    def tcp_ping(self, host: str, port: int, timeout_ms: int | None = None) -> bool:
-        to = (timeout_ms or 2000) / 1000.0
-        try:
-            with socket.create_connection((host, port), timeout=to):
-                return True
-        except Exception:
-            return False
+    # Общее
+    def build_url(self, scheme: str, host: str, port: int, path: str = "/") -> str:
+        path = path or "/"
+        if not path.startswith("/"):
+            path = "/" + path
+        return f"{scheme}://{host}:{int(port)}{path}"
 
-    def tls_handshake(self, host: str, port: int, timeout_ms: int | None = None) -> bool:
-        to = (timeout_ms or 3000) / 1000.0
-        ctx = ssl.create_default_context()
-        try:
-            with socket.create_connection((host, port), timeout=to) as sock:
-                with ctx.wrap_socket(sock, server_hostname=host) as ssock:
-                    ssock.do_handshake()
-                    return True
-        except Exception:
-            return False
+    def fqdn(self, host: str) -> str:
+        return host  # FQDN как есть; логика DNS вне скоупа
 
-    # --- HTTP пробы ---
-    def http_get(self, url: str, timeout_ms: int | None = None) -> Tuple[int, int]:
-        to = (timeout_ms or 2000) / 1000.0
+    # Порт
+    def wait_port(self, host: str, port: int, *, timeout_ms: Optional[int] = None, interval_ms: Optional[int] = None) -> None:
+        tmo = int(timeout_ms if timeout_ms is not None else self._cfg.fsm.state_initializing_timeout_ms)
+        interval = int(interval_ms if interval_ms is not None else 200)
+        ok = _wait_port(host, int(port), timeout_ms=tmo, interval_ms=interval)
+        if not ok:
+            raise TimeoutError(f"port {host}:{port} not ready within {tmo}ms")
+
+    # HTTP(S) пробы для будущих use-cases
+    def probe_http(self, url: str, *, timeout_ms: Optional[int] = None) -> Tuple[int, bytes]:
+        tmo = (timeout_ms if timeout_ms is not None else self._cfg.fsm.state_running_tick_timeout_ms) / 1000.0
         u = urllib.parse.urlparse(url)
-        conn_cls = http.client.HTTPSConnection if u.scheme == "https" else http.client.HTTPConnection
-        port = u.port or (443 if u.scheme == "https" else 80)
-        path = u.path or "/"
-        if u.query:
-            path += f"?{u.query}"
-        conn = conn_cls(u.hostname, port=port, timeout=to)
-        try:
-            conn.request("GET", path)
-            resp = conn.getresponse()
-            n = len(resp.read() or b"")
-            return resp.status, n
-        except Exception:
-            return 0, 0
-        finally:
-            try:
-                conn.close()
-            except Exception:
-                pass
+        conn = http.client.HTTPConnection(u.hostname, u.port, timeout=tmo)
+        conn.request("GET", u.path or "/")
+        resp = conn.getresponse()
+        body = resp.read()
+        conn.close()
+        return resp.status, body
+
+    def probe_https(self, url: str, *, timeout_ms: Optional[int] = None) -> Tuple[int, bytes]:
+        tmo = (timeout_ms if timeout_ms is not None else self._cfg.fsm.state_running_tick_timeout_ms) / 1000.0
+        u = urllib.parse.urlparse(url)
+        ctx = ssl.create_default_context()
+        conn = http.client.HTTPSConnection(u.hostname, u.port, timeout=tmo, context=ctx)
+        conn.request("GET", u.path or "/")
+        resp = conn.getresponse()
+        body = resp.read()
+        conn.close()
+        return resp.status, body

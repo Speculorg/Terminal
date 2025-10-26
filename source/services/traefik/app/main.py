@@ -3,7 +3,8 @@ from dataclasses import dataclass
 
 from base import BaseService
 from interfaces import IRunProfile
-from entities.state_enum import StateEnum
+from entities import StateEnum
+
 
 @dataclass(frozen=True)
 class TraefikRunProfile(IRunProfile):
@@ -11,6 +12,9 @@ class TraefikRunProfile(IRunProfile):
     stage_gates = {
         StateEnum.SECURING: { "consul_tokens.done", "vault_initial_pem.done" },
         StateEnum.REGISTERING: { "consul_tokens.done", "vault_initial_pem.done" },
+    }
+    start_cmd = {
+        'https': ['traefik', '--configFile=/config/traefik.yml'],
     }
 
 

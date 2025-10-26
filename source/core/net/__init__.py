@@ -1,4 +1,5 @@
 from .facade import Net
-from .probe import tcp, tls, http_get
+from .port import wait_port
 
-__all__ = ["Net", "tcp", "tls", "http_get"]
+
+__all__ = ["Net", "wait_port"]

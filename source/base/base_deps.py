@@ -17,7 +17,7 @@ from adapters.metrics import PromMetrics
 
 @dataclass
 class BaseDeps(IDeps):
-    configs: IConfigs
+    cfg: IConfigs
     logger: ILogger
     fs: IFS
     markers: IMarker
@@ -45,23 +45,23 @@ class BaseDepsFactory:
         markers = MarkersStore(paths)
         fsm = FSM
         registrar = ConsulRegistrar(cfg, logger)
-        net = BaseNet
+        net = BaseNet(cfg)
         metrics = PromMetrics()
         tls_reloader = type("NoopReloader",(object,),{"reload":lambda self: None})()
         tls_watch = type("NoopWatch",(object,),{"start_watch":lambda self,paths,debounce_ms: None})()
         tls_probe = type("NoopProbe",(object,),{"validate_chain":lambda self,cert,full,ca: None})()
         kv = ConsulKV(cfg)
         return BaseDeps(
-            configs=cfg,
+            cfg=cfg,
             logger=logger,
             fs=paths,
             markers=markers,
+            net=net,
             fsm=fsm,                    # type: ignore
             registrar=registrar,        # type: ignore
-            net=net,                    # type: ignore
-            metrics=metrics,            # type: ignore
             tls_reloader=tls_reloader,  # type: ignore
             tls_watch=tls_watch,        # type: ignore
             tls_probe=tls_probe,        # type: ignore
             kv=kv,                      # type: ignore
+            metrics=metrics,            # type: ignore
         )

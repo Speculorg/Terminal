@@ -3,7 +3,7 @@ from dataclasses import dataclass
 
 from base import BaseService
 from interfaces import IRunProfile
-from entities.state_enum import StateEnum
+from entities import StateEnum
 
 
 @dataclass(frozen=True)
@@ -17,6 +17,10 @@ class VaultRunProfile(IRunProfile):
         StateEnum.STARTING: { "consul_tokens.done" },
         StateEnum.SECURING: { "vault_pki.done", "vault_initial_pem.done" },
         StateEnum.REGISTERING: { "vault_pki.done", "vault_initial_pem.done" },
+    }
+    start_cmd = {
+        'http': ['vault', 'server', '-config=/config/vault_http.hcl'],
+        'https': ['vault', 'server', '-config=/config/vault_https.hcl']
     }
 
 
