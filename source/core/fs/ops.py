@@ -7,11 +7,19 @@ def safe_makedirs(path: str, mode: int = 0o755) -> None:
 
 
 def ensure_layout(self) -> None:
-    """Создаёт каталоги fs/terminal/*, если их ещё нет."""
+    """Создаёт каталоги fs/terminal/*, если их ещё нет. И создаёт совместимый линк /certs -> cfg.fs.certs_dir."""
     safe_makedirs(self.markers_dir, 0o755)
     safe_makedirs(self.secrets_dir, 0o700)
     safe_makedirs(self.certs_dir,   0o750)
     safe_makedirs(self.tmp_dir,     0o700)
+    # compat symlink '/certs' expected by daemon configs
+    try:
+        target = self.certs_dir
+        link = "/certs"
+        if not os.path.exists(link):
+            os.symlink(target, link)
+    except Exception:
+        pass
 
 
 def atomic_write(path: str, data: bytes, mode: int = 0o644) -> None:

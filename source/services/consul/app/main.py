@@ -17,8 +17,8 @@ class ConsulRunProfile(IRunProfile):
         StateEnum.REGISTERING: { "consul_tokens.done", "vault_initial_pem.done" },
     }
     start_cmd = {
-        'http': ['consul', 'agent', '-config-file=/config/consul_http.hcl'],
-        'https': ['consul', 'agent', '-config-file=/config/consul_https.hcl'],
+        'http': [ 'consul', 'agent', '-config-file=/config/consul_http.hcl' ],
+        'https':  ['consul', 'agent', '-config-file=/config/consul_https.hcl' ],
     }
 
 

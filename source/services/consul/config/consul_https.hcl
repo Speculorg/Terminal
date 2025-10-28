@@ -32,9 +32,9 @@ acl {
 
 tls {
   defaults {
-    ca_file = "/certs/ca.crt"
-    cert_file = "/certs/consul.crt"
-    key_file = "/certs/consul.key"
+    ca_file = "/fs/terminal/certs/ca.crt"
+    cert_file = "/fs/terminal/certs/consul.crt"
+    key_file = "/fs/terminal/certs/privkey.pem"
     verify_incoming = true
     verify_outgoing = true
   }

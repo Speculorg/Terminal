@@ -5,7 +5,7 @@ from .paths import Paths
 from .ops import atomic_write_text
 
 
-_VALID = re.compile(r"^[a-z0-9]+_[a-z0-9]+\.done$", re.IGNORECASE)
+_VALID = re.compile(r"^[a-z0-9]+_[a-z0-9_]+\.done$", re.IGNORECASE)
 
 
 class MarkersStore:
@@ -52,6 +52,8 @@ class MarkersStore:
 
     def exists(self, marker_name: str) -> bool:
         try:
-            return marker_name in set(self.list_all())
+            target = marker_name.strip().lower()
+            allm = {m.lower() for m in self.list_all()}
+            return target in allm
         except Exception:
             return False

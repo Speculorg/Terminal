@@ -36,7 +36,7 @@ entryPoints:
 tls:
   certificates:
     - certFile: /certs/traefik.crt
-      keyFile:  /certs/traefik.key
+      keyFile:  /certs/privkey.pem
   options:
     default:
       minVersion: VersionTLS12
@@ -49,9 +49,9 @@ providers:
       scheme: https
       address: consul:8501
       tls:
-        ca:   /certs/ca.crt
-        cert: /certs/traefik.crt
-        key:  /certs/traefik.key
+        ca:   /fs/terminal/certs/ca.crt
+        cert: /fs/terminal/certs/traefik.crt
+        key:  /fs/terminal/certs/privkey.pem
         insecureSkipVerify: false
     watch: true
     exposedByDefault: false

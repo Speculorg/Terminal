@@ -10,6 +10,7 @@ from interfaces.i_run_profile import IRunProfile
 from interfaces.i_marker import IMarker
 from interfaces.i_logger import ILogger
 from interfaces.i_configs import IConfigs
+from .tls_policy import TLSPolicy
 
 _MARKER_RE = re.compile(r"^[a-z0-9]+_[a-z0-9]+\.done$", re.IGNORECASE)
 _MARKER_SUFFIX = ".done"
@@ -103,7 +104,19 @@ class FSMPolicy:
     def on_tick(self) -> StateEnum:
         return StateEnum.RUNNING
 
-    # === Pause/Resume/Stop ===
+
+    # === TLS transition trigger ===
+    def handle_tls_transition(self, cfg: IConfigs, logger: ILogger, markers: IMarker, net, run_profile: IRunProfile, current_mode: str, restart_cb, resolve_port_cb) -> None:
+        """Делегирует решение и исполнение TLS-перехода в TLSPolicy."""
+        try:
+            TLSPolicy().transition_if_ready(cfg, logger, markers, net, run_profile, current_mode, restart_cb, resolve_port_cb)
+        except Exception as e:
+            try:
+                logger.warn("tls.transition.error", svc=cfg.context.name, details={"error": str(e)})
+            except Exception:
+                pass
+
+# === Pause/Resume/Stop ===
     def pause(self) -> StateEnum:
         return StateEnum.PAUSED
 

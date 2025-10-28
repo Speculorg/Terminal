@@ -14,7 +14,7 @@ class TraefikRunProfile(IRunProfile):
         StateEnum.REGISTERING: { "consul_tokens.done", "vault_initial_pem.done" },
     }
     start_cmd = {
-        'https': ['traefik', '--configFile=/config/traefik.yml'],
+        'https': [ 'traefik', '--configFile=/config/traefik.yml' ],
     }
 
 
