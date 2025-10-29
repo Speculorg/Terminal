@@ -1,12 +1,12 @@
 from __future__ import annotations
 from dataclasses import dataclass
+from base.base_fsm import BaseFSM
 from typing import Optional, Set, Dict, List, Tuple
 import time
 
-from entities.state_enum import StateEnum
-from entities.run_mode_enum import RunModeEnum
-from entities.health_status_enum import HealthStatusEnum
-from entities.error_code_enum import ErrorCodeEnum
+from entities import StateEnum, RunModeEnum, HealthStatusEnum, ErrorCodeEnum
+
+from core.policies import TLSPolicy, InitPolicy
 
 @dataclass
 class StateCtx:
@@ -15,23 +15,38 @@ class StateCtx:
     since_ts: int  # unix seconds
     heartbeat_ts: Optional[int] = None
 
-class FSM:
+class FSM(BaseFSM):
     """Минимальная рабочая FSM под публикации и регистрацию.
     Политики и детекции run_mode будут позже.
     """
-    def __init__(self, cfg, logger, markers, kv, metrics, registrar=None):
+    def __init__(self, cfg, logger, markers, fs, net, kv=None, metrics=None, registrar=None):
         self.cfg = cfg
         self.logger = logger
         self.markers = markers
+        self.fs = fs
+        self.net = net
         self.kv = kv
         self.metrics = metrics
         self.registrar = registrar
+        
         self.ctx = StateCtx(current=StateEnum.STARTING, previous=None, since_ts=int(time.time()))
         self.required_markers: Set[str] = set()
         self.stage_gates: Dict[StateEnum, List[Tuple[str,str]]] = {}
         self.svc: Optional[str] = None
         self.run_mode: Optional[RunModeEnum] = None
         self._last_publish_ts: int = 0
+        self._tls_restart_cb=None
+        self._tls_resolve_port_cb=None
+        self._tls_run_profile=None
+        self._tls_net=None
+        self._tls_current_mode=None
+    
+    def configure_tls(self, run_profile, net, restart_cb, resolve_port_cb, current_mode: str = "http") -> None:
+        self._tls_run_profile = run_profile
+        self._tls_net = net
+        self._tls_restart_cb = restart_cb
+        self._tls_resolve_port_cb = resolve_port_cb
+        self._tls_current_mode = current_mode
 
     def on_enter(self, state: StateEnum) -> None:
         # enforce stage gates before state switch
@@ -48,6 +63,73 @@ class FSM:
         now = int(time.time())
         self.ctx.previous = self.ctx.current
         self.ctx.current = state
+        
+        # Первичные действия на ранних стадиях: делегирование init-модулю сервиса
+        if state in (StateEnum.BOOTSTRAPPING, StateEnum.INITIALIZING, StateEnum.SECURING):
+            try:
+                pol = InitPolicy(self.cfg, self.logger, self.fs, self.markers, self.net)
+                nxt = pol.apply(state)
+                if nxt and isinstance(nxt, StateEnum) and nxt != state:
+                    self.on_enter(nxt)
+            except Exception as e:
+                try:
+                    self.logger.warn("init.error", svc=self.svc or self.cfg.context.name, details={"error": str(e)})
+                except Exception:
+                    pass
+
+        # Единая проверка stage-gates
+        ok, missing = self.precheck_stage_gates(state)
+        if not ok:
+            try:
+                self.logger.info("fsm.stage_gate.missing", svc=self.svc or self.cfg.context.name, details={"state": state.name, "missing": sorted(missing)})
+            finally:
+                return
+
+        # TLS_TRANSITION: делегируем правила в TLSPolicy
+        if state == StateEnum.TLS_TRANSITION:
+            try:
+                if self._tls_run_profile and self._tls_restart_cb and self._tls_resolve_port_cb and self._tls_net:
+                    TLSPolicy().transition_if_ready(self.cfg, self.logger, self.markers, self._tls_net, self._tls_run_profile, self._tls_current_mode or "http", self._tls_restart_cb, self._tls_resolve_port_cb)
+            except Exception as e:
+                pass
+            # Решение результата TLS-перехода: проверим порт https и выполним переход
+            try:
+                https_port = int(self._tls_resolve_port_cb("https")) if self._tls_resolve_port_cb else None
+            except Exception:
+                https_port = None
+            deadline_ms = int(getattr(self.cfg.fsm, "state_tls_transition_timeout_ms", 5000))
+            ok_https = False
+            if https_port and self._tls_net:
+                try:
+                    ok_https = bool(self._tls_net.wait_port("localhost", https_port, deadline_ms=deadline_ms))
+                except Exception:
+                    ok_https = False
+            if ok_https:
+                try:
+                    self.logger.info("fsm.tls_transition.ok", svc=self.svc or self.cfg.context.name, details={"port": int(https_port)})
+                except Exception:
+                    pass
+                # успех: идём в REGISTERING
+                try:
+                    self.on_enter(StateEnum.REGISTERING)
+                except Exception:
+                    pass
+            else:
+                try:
+                    self.logger.info("fsm.tls_transition.timeout", svc=self.svc or self.cfg.context.name, details={"timeout_ms": int(deadline_ms)})
+                except Exception:
+                    pass
+                # неуспех: деградация
+                try:
+                    self.on_enter(StateEnum.DEGRADED)
+                except Exception:
+                    pass
+
+                try:
+                    self.logger.warn("tls.transition.error", svc=self.svc or self.cfg.context.name, details={"error": str(e)})
+                except Exception:
+                    pass
+
         self.ctx.since_ts = now
         self.logger.info("fsm.enter", svc=self.svc or self.cfg.context.name, state=state.name, event="fsm.enter")
 
@@ -102,7 +184,7 @@ class FSM:
         maxr = max(1, int(self.cfg.registrar.max_rereg_attempts_per_window))
         while attempts < maxr:
             try:
-                if self.registrar.register(self.svc or self.cfg.context.name):
+                if self.registrar and self.registrar.register(self.svc or self.cfg.context.name):
                     return True
             except Exception as e:
                 self.logger.warn("registrar.register.error", svc=self.svc or self.cfg.context.name, event="registrar.register", details={"exc": type(e).__name__})
@@ -114,7 +196,7 @@ class FSM:
         if not self.registrar:
             return
         try:
-            if self.registrar.heartbeat(self.svc or self.cfg.context.name):
+            if self.registrar and self.registrar.heartbeat(self.svc or self.cfg.context.name):
                 self.ctx.heartbeat_ts = int(time.time())
         except Exception as e:
             self.logger.warn("registrar.heartbeat.error", svc=self.svc or self.cfg.context.name, event="registrar.heartbeat", details={"exc": type(e).__name__})

@@ -43,14 +43,14 @@ class BaseDepsFactory:
         ensure_layout(paths)
         logger = JsonLogger(cfg)
         markers = MarkersStore(paths)
-        fsm = FSM
         registrar = ConsulRegistrar(cfg, logger)
         net = BaseNet(cfg)
         metrics = PromMetrics()
+        kv = ConsulKV(cfg)
+        fsm = FSM(cfg, logger, paths, markers, net, registrar, kv, metrics)
         tls_reloader = type("NoopReloader",(object,),{"reload":lambda self: None})()
         tls_watch = type("NoopWatch",(object,),{"start_watch":lambda self,paths,debounce_ms: None})()
         tls_probe = type("NoopProbe",(object,),{"validate_chain":lambda self,cert,full,ca: None})()
-        kv = ConsulKV(cfg)
         return BaseDeps(
             cfg=cfg,
             logger=logger,

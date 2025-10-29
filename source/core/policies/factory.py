@@ -1,7 +1,8 @@
 from __future__ import annotations
 from dataclasses import dataclass
+
+
 from .marker_policy import MarkerPolicy
-from .fsm_policy import FSMPolicy
 from .tls_policy import TLSPolicy
 from .registrar_policy import RegistrarPolicy
 from .health_policy import HealthPolicy
@@ -20,10 +21,9 @@ class PoliciesFactory:
     fs: Any  # FS facade
 
     def __post_init__(self):
-        self.marker = MarkerPolicy(self.cfg)
-        self.fsm = FSMPolicy(self.cfg)
-        self.tls = TLSPolicy(self.cfg)
-        self.registrar = RegistrarPolicy(self.cfg, self.logger, self.registrar)
-        self.health = HealthPolicy(self.cfg)
-        self.kv = KVPolicy(self.cfg)
+        self.marker_policy = MarkerPolicy(self.cfg)
+        self.tls_policy = TLSPolicy(self.cfg)
+        self.registrar_policy = RegistrarPolicy(self.cfg, self.logger, self.registrar)
+        self.health_policy = HealthPolicy(self.cfg)
+        self.kv_policy = KVPolicy(self.cfg)
         self.fs_policy = FSPolicy(self.cfg, self.logger, self.metrics, self.fs)

@@ -1,20 +1,32 @@
+
 from __future__ import annotations
-from typing import Set
-from entities.run_mode_enum import RunModeEnum
+from typing import Iterable, Set, Tuple, Dict, Optional
+from entities.state_enum import StateEnum
 
 class MarkerPolicy:
+    """
+    Политика маркеров: только проверки и решения. Файлы не создает.
+    """
+
     @staticmethod
-    def detect_run_mode(required_markers: Set[str], markers, *, svc: str) -> RunModeEnum:
-        """Определяет режим запуска по наличию обязательных маркеров.
-        required_markers: имена файлов маркеров без пути и svc.
-        svc: имя сервиса (cfg.context.name).
-        """
-        if not required_markers:
-            return RunModeEnum.NORMAL
-        ok, missing = markers.require(required_markers, svc=svc)
-        if ok:
-            return RunModeEnum.NORMAL
-        # Частичный набор → RECOVERY, отсутствие всех → FIRST
-        if len(missing) == len(required_markers):
-            return RunModeEnum.FIRST
-        return RunModeEnum.RECOVERY
+    def check_required(logger, svc: str, markers, required: Optional[Iterable[str]]) -> bool:
+        req = set(required or [])
+        if not req:
+            return True
+        missing = sorted([m for m in req if not markers.exists(m)])
+        if missing:
+            logger.info("service.start.precondition", svc=svc, details={"missing": missing})
+            return False
+        return True
+
+    @staticmethod
+    def gates_for_state(profile, state: StateEnum) -> Set[str]:
+        sg = getattr(profile, "stage_gates", None) or {}
+        return set(sg.get(state, set()))
+
+    @staticmethod
+    def decide_initial_mode(profile, markers) -> str:
+        # https, если гейты SECURING присутствуют
+        need = MarkerPolicy.gates_for_state(profile, StateEnum.SECURING)
+        ready = all(markers.exists(m) for m in need) if need else False
+        return "https" if ready else "http"

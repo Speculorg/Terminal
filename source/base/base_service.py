@@ -10,7 +10,7 @@ from .base_health import BaseHealth
 from interfaces import IService, IRunProfile
 from entities import HealthStatusEnum, StateEnum
 
-from core.policies import FSMPolicy, TLSPolicy, DaemonPolicy
+
 
 
 class BaseService(IService):
@@ -30,22 +30,10 @@ class BaseService(IService):
         self._health = BaseHealth()
         self.initialize()
 
-
     # Жизненный цикл
     def initialize(self) -> None:
         self._logger.info("service.initialize", svc=self._cfg.context.name)
         self.start()
-
-    def _resolve_port(self, mode: str) -> int:
-        name = self._cfg.context.name
-        try:
-            if name == "consul":
-                return int(self._cfg.consul.http_port if mode=="http" else self._cfg.consul.https_port)
-            if name == "vault":
-                return int(self._cfg.vault.http_port if mode=="http" else self._cfg.vault.https_port)
-            return int(self._cfg.context.port)
-        except Exception:
-            return int(self._cfg.context.port)
 
     def start(self) -> None:
         if not self.run_profile:
@@ -58,7 +46,6 @@ class BaseService(IService):
             self._logger.error("service.start.precondition", svc=self._cfg.context.name, details={"missing": sorted(list(missing))} )
             return
 
-
         # Подготовка контекста FSM
         try:
             if hasattr(self, "_fsm"):
@@ -70,6 +57,7 @@ class BaseService(IService):
                 self._fsm.stage_gates = sg_pairs  # type: ignore
         except Exception:
             pass
+        
         # Запуск FSM отложен до реализации демонов. Пока — публикация health.
         self._health.status = HealthStatusEnum.PASSING
         self._health.heartbeat_ts = int(time.time())
@@ -108,6 +96,12 @@ class BaseService(IService):
                     port = self._resolve_port(mode)
                     self._net.wait_port("127.0.0.1", int(port), timeout_ms=self._cfg.fsm.state_initializing_timeout_ms)
                     self._logger.info("daemon.ready", svc=self._cfg.context.name, details={"port": int(port), "mode": mode})
+                    # Запуск первичных стадий FSM
+                    try:
+                        self._fsm.on_enter(StateEnum.INITIALIZING)
+                    except Exception:
+                        pass
+
                 except Exception as e:
                     self._logger.warn("daemon.wait_port.failed", svc=self._cfg.context.name, details={"error": str(e)})
                 
@@ -150,7 +144,7 @@ class BaseService(IService):
                 try:
                 # делегируем политику TLS для переключения
                     self._fsm.configure_tls(self.run_profile, self._net, self._restart_to_mode, self._resolve_port, mode)
-                    self._fsm.on_enter(StateEnum.TLS_TRANSITION)
+                    # FSM handles TLS
                 # FSM consumed: self._cfg, self._logger, self._markers, self._net, self.run_profile, mode, self._restart_to_mode, self._resolve_port)
                 except Exception:
                     pass
@@ -159,6 +153,17 @@ class BaseService(IService):
                 return
         except Exception as e:
             self._logger.error("daemon.plan.error", svc=self._cfg.context.name, details={"error": str(e)})
+        
+    def stop(self) -> None:
+        try:
+            # дерегистрация если есть
+            if self._registrar:
+                self._registrar.deregister(self._cfg.context.name)  # type: ignore
+        except Exception as e:
+            pass
+            self._logger.error("service.start.no_profile", svc=self._cfg.context.name, details={} )
+        self._logger.info("service.stop", svc=self._cfg.context.name, details={} )
+
 
     def _restart_to_mode(self, mode: str) -> None:
         """Аккуратно останавливает текущий процесс и запускает демон в указанном режиме."""
@@ -180,13 +185,15 @@ class BaseService(IService):
             self._logger.info("daemon.start", svc=self._cfg.context.name, details={"pid": int(self._daemon_proc.pid)} )
         except Exception as e:
             self._logger.error("daemon.plan.error", svc=self._cfg.context.name, details={"error": str(e)})
-        
-    def stop(self) -> None:
+
+
+    def _resolve_port(self, mode: str) -> int:
+        name = self._cfg.context.name
         try:
-            # дерегистрация если есть
-            if self._registrar:
-                self._registrar.deregister(self._cfg.context.name)  # type: ignore
-        except Exception as e:
-            pass
-            self._logger.error("service.start.no_profile", svc=self._cfg.context.name, details={} )
-        self._logger.info("service.stop", svc=self._cfg.context.name, details={} )
+            if name == "consul":
+                return int(self._cfg.consul.http_port if mode=="http" else self._cfg.consul.https_port)
+            if name == "vault":
+                return int(self._cfg.vault.http_port if mode=="http" else self._cfg.vault.https_port)
+            return int(self._cfg.context.port)
+        except Exception:
+            return int(self._cfg.context.port)

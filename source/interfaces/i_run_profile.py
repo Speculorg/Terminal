@@ -5,3 +5,4 @@ from typing import Protocol, runtime_checkable, Set, Dict, Tuple
 class IRunProfile(Protocol):
     required_markers: Set[str] | None
     stage_gates: Dict | None
+    start_cmd: Dict | None
