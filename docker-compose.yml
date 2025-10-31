@@ -51,7 +51,7 @@ services:
       SERVICE_NAME: "consul"
       SERVICE_PORT: 8501
       SERVICE_TAGS: "infra,kv,core"
-      CONSUL_HTTP_TOKEN_FILE: "fs/secrets/consul_token_for_consul"
+      CONSUL_HTTP_TOKEN_FILE: "fs/terminal/secrets/consul_token_for_consul"
     volumes:
       - ./configs.env:/configs.env:ro
       - ./source/core:/core:ro
@@ -94,7 +94,7 @@ services:
       SERVICE_NAME: "vault"
       SERVICE_PORT: 8200
       SERVICE_TAGS: "infra,ca,core"
-      CONSUL_HTTP_TOKEN_FILE: "fs/secrets/consul_token_for_vault"
+      CONSUL_HTTP_TOKEN_FILE: "fs/terminal/secrets/consul_token_for_vault"
     volumes:
       - ./configs.env:/configs.env:ro
       - ./source/core:/core:ro
