@@ -2,18 +2,16 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Optional
 
-from interfaces import IConfigs, ILogger, IFS, IMarker, IKV, IRegistrar, INet, IMetrics, IDeps, ITLSProbe, ITLSReloader, ITLSWatch, IFSM
-from base.base_net import BaseNet  # type: ignore
-
-from core.configs import Configs, load_model
-from core.fs import Paths, MarkersStore, ensure_layout
-from core.fsm import FSM  # type: ignore
-
-from adapters.logging import JsonLogger
-from adapters.kv import ConsulKV
-from adapters.registrar import ConsulRegistrar
-from adapters.metrics import PromMetrics
-
+from interfaces import IDeps, IConfigs, ILogger, IFS, IMarker, INet, IFSM
+from core.configs.loader_env import load_model
+from core.configs import Configs
+from core.logging import Logger
+from core.fs import FS
+from core.markers import Markers
+from core.net import Net
+from core.fsm import FSM
+from core.metrics import PrometheusMetrics
+from core.tls import TLSReloader, TLSWatch, TLSProbe  # stubs
 
 @dataclass
 class BaseDeps(IDeps):
@@ -21,47 +19,37 @@ class BaseDeps(IDeps):
     logger: ILogger
     fs: IFS
     markers: IMarker
-    fsm: IFSM
-    registrar: IRegistrar
     net: INet
-    metrics: IMetrics
-    tls_reloader: ITLSReloader
-    tls_watch: ITLSWatch
-    tls_probe: ITLSProbe
-    kv: IKV
+    fsm: IFSM
+    kv: Optional[object] = None
+    registrar: Optional[object] = None
+    metrics: Optional[object] = None
+    tls_reloader: Optional[object] = None
+    tls_watch: Optional[object] = None
+    tls_probe: Optional[object] = None
+
+    @property
+    def configs(self) -> IConfigs:  # back-compat alias
+        return self.cfg
 
     def close(self) -> None:
-        # ресурсы для закрытия отсутствуют
-        pass
+        return None
 
 class BaseDepsFactory:
     @staticmethod
-    def build(env_file_path: Optional[str] = None) -> BaseDeps:
-        model, merged_env = load_model(env_file_path)
+    def build() -> BaseDeps:
+        model, _ = load_model()
         cfg = Configs(model)
-        paths = Paths.from_cfg(cfg)
-        ensure_layout(paths)
-        logger = JsonLogger(cfg)
-        markers = MarkersStore(paths)
-        registrar = ConsulRegistrar(cfg, logger)
-        net = BaseNet(cfg)
-        metrics = PromMetrics()
-        kv = ConsulKV(cfg)
-        fsm = FSM(cfg, logger, paths, markers, net, registrar, kv, metrics)
-        tls_reloader = type("NoopReloader",(object,),{"reload":lambda self: None})()
-        tls_watch = type("NoopWatch",(object,),{"start_watch":lambda self,paths,debounce_ms: None})()
-        tls_probe = type("NoopProbe",(object,),{"validate_chain":lambda self,cert,full,ca: None})()
-        return BaseDeps(
-            cfg=cfg,
-            logger=logger,
-            fs=paths,
-            markers=markers,
-            net=net,
-            fsm=fsm,                    # type: ignore
-            registrar=registrar,        # type: ignore
-            tls_reloader=tls_reloader,  # type: ignore
-            tls_watch=tls_watch,        # type: ignore
-            tls_probe=tls_probe,        # type: ignore
-            kv=kv,                      # type: ignore
-            metrics=metrics,            # type: ignore
-        )
+        logger = Logger(cfg)
+        fs = FS(cfg)
+        fs.ensure_layout()
+        markers = Markers(cfg, fs)
+        net = Net(cfg)
+        metrics = PrometheusMetrics()
+        fsm = FSM(cfg, logger, markers, fs, net, kv=None, metrics=metrics, registrar=None)
+        tls_reloader = TLSReloader(cfg, logger)
+        tls_watch = TLSWatch(cfg, logger, fs)
+        tls_probe = TLSProbe(cfg, logger, fs)
+        return BaseDeps(cfg=cfg, logger=logger, fs=fs, markers=markers, net=net, fsm=fsm,
+                        kv=None, registrar=None, metrics=metrics,
+                        tls_reloader=tls_reloader, tls_watch=tls_watch, tls_probe=tls_probe)

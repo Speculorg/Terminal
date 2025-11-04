@@ -21,3 +21,12 @@ class Paths:
             secrets_dir=str(fs.secrets_dir),
             tmp_dir=str(fs.tmp_dir),
         )
+
+    def ensure_relative(self, path: str) -> str:
+        """Запрещает абсолютные пути и выход наверх. Возвращает как есть."""
+        p = str(path or "").strip()
+        if not p:
+            raise ValueError("path must be non-empty")
+        if p.startswith("/") or ".." in p:
+            raise ValueError("absolute and parent paths are not allowed")
+        return p

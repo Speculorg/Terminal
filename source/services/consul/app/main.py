@@ -29,3 +29,4 @@ class ConsulService(BaseService):
 
 if __name__ == "__main__":
     svc = ConsulService()
+    svc.run()

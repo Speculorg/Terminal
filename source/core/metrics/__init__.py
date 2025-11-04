@@ -1,2 +1,3 @@
-from .facade import Metrics
-__all__ = ['Metrics']
+from .prometheus import PrometheusMetrics
+
+__all__ = ['PrometheusMetrics']

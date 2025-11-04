@@ -1,26 +1,55 @@
 from __future__ import annotations
-from interfaces.i_marker import IMarker
+from typing import Optional, List
+from base.base_marker import BaseMarker
+from interfaces import IConfigs
 from core.fs import FS
 
-class Markers(IMarker):
-    """Фасад маркеров поверх FS."""
-    def __init__(self, cfg=None, fs: FS | None = None) -> None:
+class Markers(BaseMarker):
+    """Фасад маркеров поверх FS с плоскими именами."""
+    def __init__(self, cfg: IConfigs, fs: Optional[FS] = None) -> None:
+        self._cfg = cfg
         self._fs = fs or FS(cfg)
 
-    def path_for(self, svc: str, name: str) -> str:
-        return self._fs.markers.path_for(svc, name)
+    def exists(self, name: str) -> bool:
+        n = self._validate(name)
+        try:
+            return self._fs.markers.exists(n)
+        except Exception:
+            return False
 
-    def exists(self, svc: str, name: str) -> bool:
-        return self._fs.markers.exists(svc, name)
+    def set(self, name: str, payload: str | None = None) -> None:
+        n = self._validate(name)
+        svc = n.split("_", 1)[0]
+        short = n[len(svc)+1:]
+        try:
+            self._fs.markers.set(svc, short, payload)
+        except Exception:
+            path = self._fs.markers.path_for(svc, short)
+            text = payload if payload is not None else ""
+            self._fs.atomic_write_text(path, text, mode=0o644)
 
-    def set(self, svc: str, name: str, payload: str | None = None) -> None:
-        self._fs.markers.set(svc, name, payload)
+    def delete(self, name: str) -> None:
+        n = self._validate(name)
+        svc = n.split("_", 1)[0]
+        short = n[len(svc)+1:]
+        try:
+            self._fs.markers.delete(svc, short)
+        except Exception:
+            path = self._fs.markers.path_for(svc, short)
+            try:
+                self._fs.remove(path)
+            except Exception:
+                pass
 
-    def delete(self, svc: str, name: str) -> None:
-        self._fs.markers.delete(svc, name)
+    def list(self, prefix: str | None = None) -> list[str]:
+        items = self._list_all()
+        if prefix:
+            pre = (prefix or "").strip().lower()
+            items = [m for m in items if m.lower().startswith(pre)]
+        return sorted(items)
 
-    def list(self, svc: str) -> list[str]:
-        return self._fs.markers.list(svc)
-
-    def require(self, required: set[str], svc: str) -> tuple[bool, set[str]]:
-        return self._fs.markers.require(required, svc)
+    def _list_all(self) -> list[str]:
+        try:
+            return self._fs.markers.list_all()
+        except Exception:
+            return []

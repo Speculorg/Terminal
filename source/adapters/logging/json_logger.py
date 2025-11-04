@@ -38,7 +38,7 @@ def _extract_error_code(record: Mapping[str, Any]) -> Optional[str]:
 
 class JsonLogger(ILogger):
     """Простой JSON-логгер.
-    Схема: timestamp, level, svc, state, correlation_id, message, event?, details?, error?
+    Схема: timestamp, level, svc, state, correlation_id, event, details?, error?
     Без trace_id. Анти-флуд WARN: окно {} сек.
     """.format(_WARN_FLOOD_WINDOW_SEC)
 
@@ -62,10 +62,8 @@ class JsonLogger(ILogger):
             "svc": svc or ctx.svc,
             "state": state or ctx.state,
             "correlation_id": ctx.correlation_id,
-            "message": message,
+            "event": (event if event is not None else message),
         }
-        if event is not None:
-            record["event"] = event
         if details is not None:
             record["details"] = details
         # error не формируем здесь. Фасад может передать в details/error при необходимости.

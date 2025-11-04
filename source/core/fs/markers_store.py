@@ -10,11 +10,11 @@ _VALID = re.compile(r"^[a-z0-9]+_[a-z0-9_]+\.done$", re.IGNORECASE)
 
 class MarkersStore:
 
-    def __init__(self, paths: Paths) -> None:
-        self._paths = paths
+    def __init__(self, path: Paths) -> None:
+        self._path = path
 
     def _dir(self) -> str:
-        return self._paths.markers_dir
+        return self._path
 
     def path_for(self, svc: str, name: str) -> str:
         fname = f"{svc}_{name}.done"

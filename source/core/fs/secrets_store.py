@@ -3,8 +3,8 @@ from .ops import atomic_read, atomic_read_text, atomic_write, atomic_write_text,
 
 class SecretsStore:
     
-    def __init__(self, secrets_dir: str) -> None:
-        self._root = secrets_dir
+    def __init__(self, path: str) -> None:
+        self._root = path
 
     def path(self, name: str) -> str:
         return f"{self._root}/{name}"

@@ -1,21 +1,21 @@
 from __future__ import annotations
-from typing import Optional, Mapping, Any
-from interfaces import ILogger, IConfigs
+from typing import Optional, Mapping, Any, Dict
+from interfaces import IConfigs
+from entities import LogLevelEnum
+from base.base_logger import BaseLogger
+from adapters.logging import JsonLogger
 
-class Logger(ILogger):
-    """Фасад логирования ядра. Делегирует в JsonLogger (adapter)."""
+class Logger(BaseLogger):
+    """Фасад логгера. Наследуется от BaseLogger и пишет в адаптер JsonLogger."""
     def __init__(self, cfg: IConfigs) -> None:
-        from adapters.logging import JsonLogger
-        self._impl = JsonLogger(cfg)
+        super().__init__()
+        self._sink = JsonLogger(cfg)
 
-    def debug(self, message: str, *, svc: Optional[str]=None, state: Optional[str]=None, event: Optional[str]=None, details: Optional[Mapping[str, Any]]=None) -> None:
-        self._impl.debug(message, svc=svc, state=state, event=event, details=details)
-
-    def info(self, message: str, *, svc: Optional[str]=None, state: Optional[str]=None, event: Optional[str]=None, details: Optional[Mapping[str, Any]]=None) -> None:
-        self._impl.info(message, svc=svc, state=state, event=event, details=details)
-
-    def warn(self, message: str, *, svc: Optional[str]=None, state: Optional[str]=None, event: Optional[str]=None, details: Optional[Mapping[str, Any]]=None) -> None:
-        self._impl.warn(message, svc=svc, state=state, event=event, details=details)
-
-    def error(self, message: str, *, svc: Optional[str]=None, state: Optional[str]=None, event: Optional[str]=None, details: Optional[Mapping[str, Any]]=None) -> None:
-        self._impl.error(message, svc=svc, state=state, event=event, details=details)
+    def _write(self, rec: Dict[str, Any]) -> None:
+        # Пробрасываем в JsonLogger с каноническими полями
+        level = LogLevelEnum(rec.get("level"))
+        event_code = rec.get("event") or ""
+        svc = rec.get("svc")
+        state = rec.get("state")
+        details = rec.get("details")
+        self._sink.log(level, event_code, svc=svc, state=state, event=event_code, details=details)

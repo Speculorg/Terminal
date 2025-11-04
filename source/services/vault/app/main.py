@@ -31,3 +31,4 @@ class VaultService(BaseService):
 
 if __name__ == "__main__":
     svc = VaultService()
+    svc.run()

@@ -54,7 +54,7 @@ class FSM(BaseFSM):
         if gates:
             missing_all = []
             for svc, name in gates:
-                ok, missing = self.markers.require({name}, svc=svc)
+                ok, missing = self.markers.require({f"{svc}_{name}.done"})
                 if not ok:
                     missing_all.extend([f"{svc}/{m}" for m in sorted(missing)])
             if missing_all:

@@ -25,3 +25,4 @@ class TraefikService(BaseService):
 
 if __name__ == "__main__":
     svc = TraefikService()
+    svc.run()
