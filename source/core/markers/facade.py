@@ -1,10 +1,10 @@
 from __future__ import annotations
 from typing import Optional, List
-from base.base_marker import BaseMarker
+from base.base_markers import BaseMarkers
 from interfaces import IConfigs
 from core.fs import FS
 
-class Markers(BaseMarker):
+class Markers(BaseMarkers):
     """Фасад маркеров поверх FS с плоскими именами."""
     def __init__(self, cfg: IConfigs, fs: Optional[FS] = None) -> None:
         self._cfg = cfg

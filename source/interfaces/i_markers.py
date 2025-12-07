@@ -2,7 +2,7 @@ from __future__ import annotations
 from typing import Protocol, runtime_checkable, Set, Tuple, List
 
 @runtime_checkable
-class IMarker(Protocol):
+class IMarkers(Protocol):
     """Интерфейс работы с маркерами"""
     def exists(self, name: str) -> bool: ...
     def set(self, name: str, payload: str | None = None) -> None: ...

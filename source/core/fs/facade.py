@@ -13,9 +13,6 @@ from .markers_store import MarkersStore
 from .temp_store import TempStore
 
 class FS(BaseFS):
-    """Фасад FS. Собирает Paths и низкоуровневые операции; предоставляет хранилища как внутренние поля.
-    Права/режимы каталогов соответствуют TERM-1 §5.8 (в ops.ensure_layout).
-    """
     def __init__(self, cfg: IConfigs) -> None:
         # Инициализируем пути фасада ДО вызова BaseFS.__init__
         self.paths  = Paths(

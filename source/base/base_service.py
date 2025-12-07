@@ -2,6 +2,7 @@ from __future__ import annotations
 from typing import Optional
 
 from .base_deps import BaseDepsFactory
+from core.policies_v2.compose import build_policies
 from interfaces import IService, IRunProfile
 
 class BaseService(IService):
@@ -25,7 +26,8 @@ class BaseService(IService):
         self._fsm = deps.fsm
 
         # Подготовка FSM: имя сервиса и stage_gates с профиля
-        self._fsm.svc = self._cfg.context.name  # type: ignore[attr-defined]
+        self._fsm.profile = self.run_profile
+        self._fsm.policies = build_policies(self._logger, self._cfg, self._fs, self._markers, self._net, self.run_profile)
         if hasattr(self.run_profile, "stage_gates"):
             self._fsm.stage_gates = getattr(self.run_profile, "stage_gates")  # type: ignore[attr-defined]
 

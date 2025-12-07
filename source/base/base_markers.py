@@ -2,11 +2,11 @@ from __future__ import annotations
 import re
 from typing import Set, Tuple, List
 
-from interfaces.i_marker import IMarker
+from interfaces.i_markers import IMarkers
 
 _VALID = re.compile(r"^[a-z0-9]+_[a-z0-9_]+\.done$")
 
-class BaseMarker(IMarker):
+class BaseMarkers(IMarkers):
     """Базовый каркас фасада маркеров.
     Реализует валидацию имени и базовую логику require()/list(prefix).
     Конкретные операции чтения/записи определяются в наследнике.

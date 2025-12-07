@@ -2,7 +2,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Optional
 
-from interfaces import IDeps, IConfigs, ILogger, IFS, IMarker, INet, IFSM
+from interfaces import IDeps, IConfigs, ILogger, IFS, IMarkers, INet, IFSM
 from core.configs.loader_env import load_model
 from core.configs import Configs
 from core.logging import Logger
@@ -15,10 +15,11 @@ from core.tls import TLSReloader, TLSWatch, TLSProbe  # stubs
 
 @dataclass
 class BaseDeps(IDeps):
+
     cfg: IConfigs
     logger: ILogger
     fs: IFS
-    markers: IMarker
+    markers: IMarkers
     net: INet
     fsm: IFSM
     kv: Optional[object] = None

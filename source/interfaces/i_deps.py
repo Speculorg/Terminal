@@ -5,7 +5,7 @@ from .i_logger import ILogger
 from .i_metrics import IMetrics
 from .i_net import INet
 from .i_fs import IFS
-from .i_marker import IMarker
+from .i_markers import IMarkers
 from .i_kv import IKV
 from .i_registrar import IRegistrar
 from .i_fsm import IFSM
@@ -16,7 +16,7 @@ class IDeps(Protocol):
     configs: IConfigs
     logger: ILogger
     fs: IFS
-    markers: IMarker
+    markers: IMarkers
     kv: IKV
     registrar: IRegistrar
     net: INet

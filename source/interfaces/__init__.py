@@ -8,7 +8,7 @@ from .i_deps import IDeps
 from .i_configs import IConfigs
 from .i_registrar import IRegistrar
 from .i_fs import IFS
-from .i_marker import IMarker
+from .i_markers import IMarkers
 from .i_kv import IKV
 from .i_logger import ILogger
 from .i_metrics import IMetrics
@@ -19,6 +19,6 @@ from .i_tls import ITLSReloader, ITLSWatch, ITLSProbe
 
 __all__ = [
     "IService", "IRunProfile", "IDeps", "IConfigs", "IRegistrar",
-    "IFS", "IMarker", "IKV", "ILogger", "IMetrics", "IHealthCheck",
+    "IFS", "IMarkers", "IKV", "ILogger", "IMetrics", "IHealthCheck",
     "INet", "IFSM", "ITLSReloader", "ITLSWatch", "ITLSProbe",
 ]
