@@ -41,7 +41,7 @@ services:
     container_name: Consul
     hostname: consul
     build:
-      context: ./source/services/consul
+      context: ./services/consul
       dockerfile: Dockerfile
     env_file:
       - ./configs.env
@@ -54,14 +54,10 @@ services:
       CONSUL_HTTP_TOKEN_FILE: "fs/terminal/secrets/consul_token_for_consul"
     volumes:
       - ./configs.env:/configs.env:ro
-      - ./source/core:/core:ro
-      - ./source/base:/base:ro
-      - ./source/services:/services:ro
-      - ./source/interfaces:/interfaces:ro
-      - ./source/entities:/entities:ro
-      - ./source/adapters:/adapters:ro
-      - ./source/services/consul/config:/config:rw
-      - ./source/services/consul/app:/app:ro
+      - ./core:/core:ro
+      - ./services:/services:ro
+      - ./services/consul/config:/config:rw
+      - ./services/consul/app:/app:ro
       # данные и слой fs/*
       - consul_data:/consul/data
       - fs:/fs/terminal
@@ -82,7 +78,7 @@ services:
     container_name: Vault
     hostname: vault
     build:
-      context: ./source/services/vault
+      context: ./services/vault
       dockerfile: Dockerfile
     cap_add:
       - IPC_LOCK 
@@ -97,14 +93,10 @@ services:
       CONSUL_HTTP_TOKEN_FILE: "fs/terminal/secrets/consul_token_for_vault"
     volumes:
       - ./configs.env:/configs.env:ro
-      - ./source/core:/core:ro
-      - ./source/base:/base:ro
-      - ./source/services:/services:ro
-      - ./source/interfaces:/interfaces:ro
-      - ./source/entities:/entities:ro
-      - ./source/adapters:/adapters:ro
-      - ./source/services/vault/app:/app:ro
-      - ./source/services/vault/config:/config:rw
+      - ./core:/core:ro
+      - ./services:/services:ro
+      - ./services/vault/app:/app:ro
+      - ./services/vault/config:/config:rw
       - vault_data:/vault/file
       - fs:/fs/terminal
     networks:
@@ -123,7 +115,7 @@ services:
     container_name: Traefik
     hostname: traefik
     build:
-      context: ./source/services/traefik
+      context: ./services/traefik
       dockerfile: Dockerfile
     env_file:
       - ./configs.env
@@ -136,14 +128,10 @@ services:
       CONSUL_HTTP_TOKEN_FILE: "fs/secrets/consul_token_for_traefik"
     volumes:
       - ./configs.env:/configs.env:ro
-      - ./source/core:/core:ro
-      - ./source/base:/base:ro
-      - ./source/services:/services:ro
-      - ./source/interfaces:/interfaces:ro
-      - ./source/entities:/entities:ro
-      - ./source/adapters:/adapters:ro
-      - ./source/services/traefik/app:/app:ro
-      - ./source/services/traefik/config:/config:rw
+      - ./core:/core:ro
+      - ./services:/services:ro
+      - ./services/traefik/app:/app:ro
+      - ./services/traefik/config:/config:rw
       - fs:/fs/terminal
     networks:
       - net_private
