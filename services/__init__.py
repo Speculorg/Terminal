@@ -1,2 +1,7 @@
-# Пакет тонких сервисов системы Speculorg.Terminal
+# Пакет тонких сервисов
+"""
+speculorg.terminal.services
+===========================
 
+Реализации тонких сервисов (Consul, Vault, Traefik).
+"""
