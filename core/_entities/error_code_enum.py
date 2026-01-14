@@ -1,0 +1,27 @@
+"""
+speculorg.terminal.core._entities.error_code_enum
+=================================================
+
+Перечисление кодов ошибок.
+"""
+from enum import Enum
+
+
+class ErrorCodeEnum(Enum):
+    """
+    Коды ошибок, используемые в системе.
+    """
+    GENERAL_ERROR = "GENERAL_ERROR"
+    CONFIG_LOAD_ERROR = "CONFIG_LOAD_ERROR"
+    DEPS_BUILD_ERROR = "DEPS_BUILD_ERROR"
+    FSM_RUN_ERROR = "FSM_RUN_ERROR"
+    DAEMON_START_ERROR = "DAEMON_START_ERROR"
+    DAEMON_STOP_ERROR = "DAEMON_STOP_ERROR"
+    NETWORK_UNREACHABLE = "NETWORK_UNREACHABLE"
+    TLS_CERT_INVALID = "TLS_CERT_INVALID"
+    REGISTRATION_FAILED = "REGISTRATION_FAILED"
+    BOOTSTRAP_FAILED = "BOOTSTRAP_FAILED"
+    MARKER_IO_ERROR = "MARKER_IO_ERROR"
+    FILESYSTEM_ERROR = "FILESYSTEM_ERROR"
+    POLICY_EXECUTION_ERROR = "POLICY_EXECUTION_ERROR"
+    SERVICE_CONSTRUCT_ERROR = "SERVICE_CONSTRUCT_ERROR"
