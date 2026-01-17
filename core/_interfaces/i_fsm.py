@@ -1,0 +1,19 @@
+from __future__ import annotations
+from typing import Protocol, runtime_checkable
+from _entities import StateEnum
+
+
+@runtime_checkable
+class IFSM(Protocol):
+    """
+    FSM — отдельный компонент (не входит в Deps).
+    """
+
+    def run(self) -> None: ...
+
+    def pause(self) -> None: ...
+    def resume(self) -> None: ...
+    def restart(self) -> None: ...
+    def stop(self) -> None: ...
+
+    def get_state(self) -> StateEnum: ...

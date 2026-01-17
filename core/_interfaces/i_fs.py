@@ -1,0 +1,29 @@
+from __future__ import annotations
+from pathlib import Path
+from typing import Protocol, runtime_checkable, Any
+
+
+@runtime_checkable
+class IFS(Protocol):
+    """
+    Порт файловой системы.
+    После сборки Deps доступ к диску должен идти через этот фасад.
+    """
+
+    def p(self, *parts: str) -> Path:
+        """Собрать абсолютный путь внутри контрактного FS-корня."""
+        ...
+
+    def exists(self, path: Path) -> bool: ...
+
+    def ensure_dir(self, path: Path, *, mode: int = 0o750) -> None:
+        ...
+
+    def read_text(self, path: Path, *, encoding: str = "utf-8") -> str: ...
+    def write_text_atomic(self, path: Path, data: str, *, encoding: str = "utf-8", mode: int = 0o640) -> None: ...
+
+    def read_bytes(self, path: Path) -> bytes: ...
+    def write_bytes_atomic(self, path: Path, data: bytes, *, mode: int = 0o640) -> None: ...
+
+    def read_json(self, path: Path) -> dict[str, Any]: ...
+    def write_json_atomic(self, path: Path, data: dict[str, Any], *, mode: int = 0o640) -> None: ...
