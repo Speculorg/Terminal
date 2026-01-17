@@ -2,18 +2,30 @@
 speculorg.terminal.core._entities.health_snapshot_type
 =====================================================
 
-Тип данных для снимка состояния сервиса (HealthSnapshot).
+Тип данных для in-memory снимка состояния сервиса (HealthSnapshot).
 """
-from typing import TypedDict
+
+from __future__ import annotations
+from typing import Optional, TypedDict
 from .state_enum import StateEnum
 
+class HealthSnapshotType(TypedDict, total=False):
 
-class HealthSnapshotType(TypedDict):
-    """
-    Структура данных для снимка состояния сервиса.
-    """
     svc: str
+    version: str
     state: StateEnum
-    timestamp: float
-    heartbeat_ts: float
-    # Другие релевантные метаданные будут добавлены позже
+
+    # publish timestamp (epoch ms)
+    ts_ms: int
+
+    # state enter timestamp (epoch ms)
+    since_ts_ms: int
+
+    # optional heartbeat timestamp (epoch ms)
+    heartbeat_ts_ms: Optional[int]
+
+    # structured health payload, JSON-serializable
+    health: dict[str, object]
+
+    # additional structured details, JSON-serializable
+    details: dict[str, object]

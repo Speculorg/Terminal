@@ -2,15 +2,24 @@
 
 ## Основные директории
 
-* `core/`: Ядро системы. Содержит инфраструктурные компоненты, реализующие архитектурные принципы.
-* `services/`: Тонкие сервисы, использующие ядро для взаимодействия с инфраструктурой и управления демонами.
-* `tests/`: Модульные, интеграционные и сквозные тесты.
-* `docs/`: Документация проекта.
-* `volumes/`: Директория для монтирования томов.
+* `speculorg/terminal/core/`: Ядро системы. Содержит:
+    - `_entities/` — доменные типы и перечисления (Enum/TypedDict/dataclasses).
+    - `_interfaces/` — порты (I*).
+    - `_base/` — каркасы (Base*).
+    - `deps/` — контейнер зависимостей Deps и фабрика DepsFactory.
+    - `configs/ logger/ fs/ markers/ net/ tls/ registrar/ fsm/` — компоненты ядра.
+    - `core/<component>/adapters/` — адаптеры компонента (без верхнеуровневого adapters/).
+* `speculorg/terminal/services/<service_name>/`: Тонкие сервисы, использующие ядро для взаимодействия с инфраструктурой и управления демонами:
+    - `app/main.py` — точка входа контейнера (создание сервиса и запуск).
+    - `configs/` — конфиги демона (http/https) и `bootstrap.py` (опционально).
+    - `Dockerfile` — образ thin service.
+* `speculorg/terminal/volumes/`: Директория для монтирования томов.
+* `speculorg/terminal/tests/`: Модульные, интеграционные и сквозные тесты.
+* `speculorg/terminal/docs/`: Документация проекта.
 
 
 ```
-speculorg-terminal/
+speculorg/terminal/
 ├── docs/
 │   ├── project_structure.md
 │   ├── architecture_overview.md

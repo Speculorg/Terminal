@@ -4,15 +4,11 @@ speculorg.terminal.core._entities.log_level_enum
 
 Перечисление уровней логирования.
 """
+
 from enum import Enum
 
-
-class LogLevelEnum(Enum):
-    """
-    Уровни логирования, соответствуют стандартным уровням logging в Python.
-    """
+class LogLevelEnum(str, Enum):
     DEBUG = "DEBUG"
     INFO = "INFO"
-    WARNING = "WARNING"
+    WARN = "WARN"
     ERROR = "ERROR"
-    CRITICAL = "CRITICAL"

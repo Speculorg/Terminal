@@ -6,9 +6,9 @@ speculorg.terminal.core._entities
 Доменные сущности, перечисления, типы данных.
 """
 
-# Импорты для удобства доступа извне пакета
 from .health_snapshot_type import HealthSnapshotType
 from .policy_result_type import PolicyResultType
+
 from .error_code_enum import ErrorCodeEnum
 from .event_code_enum import EventCodeEnum
 from .log_level_enum import LogLevelEnum
