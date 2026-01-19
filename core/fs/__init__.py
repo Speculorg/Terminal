@@ -5,3 +5,8 @@ speculorg.terminal.core.fs
 
 Фасад для безопасной работы с файловой системой (FS).
 """
+
+
+from .fs import FS
+
+__all__ = ["FS"]
