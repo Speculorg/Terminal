@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 from typing import Optional
 
 from _entities import ErrorCodeEnum, PolicyResultType, PolicyStatusEnum, StateEnum
@@ -9,7 +10,8 @@ class BasePolicy(IPolicy):
     """
     Базовый каркас политики.
 
-    Реализация должна переопределить _run_impl().
+    Принцип: базовый класс не должен бросать NotImplementedError.
+    Если _run_impl не переопределён, политика возвращает FAIL с понятной причиной.
     """
 
     def __init__(self, name: str) -> None:
@@ -23,14 +25,20 @@ class BasePolicy(IPolicy):
         return self._run_impl(state=state)
 
     def _run_impl(self, *, state: StateEnum) -> PolicyResultType:
-        raise NotImplementedError
+        return self.fail(error_code=ErrorCodeEnum.ERR_UNEXPECTED, reason="policy_not_implemented", details={"policy": self._name, "state": str(state)})
 
     # --- helpers (единая семантика) ---
 
     def ok(self, *, details: Optional[dict[str, object]] = None) -> PolicyResultType:
         return {"status": PolicyStatusEnum.OK, "details": details}
 
-    def retry(self, *, reason: str, missing: Optional[list[str]] = None, details: Optional[dict[str, object]] = None) -> PolicyResultType:
+    def retry(
+        self,
+        *,
+        reason: str,
+        missing: Optional[list[str]] = None,
+        details: Optional[dict[str, object]] = None,
+    ) -> PolicyResultType:
         d: dict[str, object] = {"reason": reason}
         if missing:
             d["missing"] = missing

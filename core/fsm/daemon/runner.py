@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import os
-import signal
+import signal as signal_mod
 import subprocess
 import time
 from dataclasses import dataclass
@@ -63,7 +63,7 @@ class DaemonRunner:
             stderr=None,
         )
 
-    def signal(self, sig: int) -> None:
+    def send_signal(self, sig: int) -> None:
         if not self.is_alive():
             return
         try:
@@ -71,12 +71,12 @@ class DaemonRunner:
         except Exception:
             pass
 
-    def stop(self, *, timeout_ms: int = 5000, sig: int = signal.SIGTERM) -> None:
+    def stop(self, *, timeout_ms: int = 5000, sig: int = signal_mod.SIGTERM) -> None:
         if not self.is_alive():
             self._p = None
             return
 
-        self.signal(sig)
+        self.send_signal(sig)
 
         deadline = time.monotonic() + max(0, int(timeout_ms)) / 1000.0
         while time.monotonic() <= deadline:
@@ -86,7 +86,7 @@ class DaemonRunner:
             time.sleep(0.05)
 
         # жёсткое добивание
-        self.signal(signal.SIGKILL)
+        self.send_signal(signal_mod.SIGKILL)
         time.sleep(0.05)
         self._p = None
 

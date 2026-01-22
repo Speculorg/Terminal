@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 from typing import Callable, List, Optional
 
 from _interfaces import (
@@ -18,6 +19,9 @@ class BaseDeps(IDeps):
     """
     Базовый контейнер зависимостей (без FSM).
 
+    Инварианты:
+    - close() идемпотентен
+    - close() вызывает close_hooks в обратном порядке
     """
 
     def __init__(
@@ -58,8 +62,12 @@ class BaseDeps(IDeps):
 class BaseDepsFactory(IDepsFactory):
     """
     Базовая фабрика Deps.
-    
+
+    Примечание:
+    - В TERM-1 используется core.deps.DepsFactory как готовая реализация.
+    - Этот класс сохранён как “каркас/тип”, но не требует переопределения сервисами.
     """
 
     def build(self) -> IDeps:
-        raise NotImplementedError
+        # Не NotImplementedError: это явная ошибка конфигурации/использования.
+        raise RuntimeError("deps_factory_not_configured: use core.deps.DepsFactory")

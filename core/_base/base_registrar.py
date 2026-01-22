@@ -5,9 +5,10 @@ from _interfaces import IRegistrar
 
 class BaseRegistrar(IRegistrar):
     """
-    Базовый каркас registrar.
+    Базовый фасад registrar.
 
-    TERM-1: Consul Catalog + TTL heartbeat (реализация будет в core/registrar/adapters/consul_registrar.py).
+    Принцип: не использовать NotImplementedError.
+    Если вдруг используется базовая реализация — это явная ошибка конфигурации.
     """
 
     def register(
@@ -20,10 +21,10 @@ class BaseRegistrar(IRegistrar):
         check_id: str | None = None,
         ttl_seconds: int | None = None,
     ) -> None:
-        raise NotImplementedError
+        raise RuntimeError("registrar_not_configured")
 
     def heartbeat(self, *, check_id: str) -> None:
-        raise NotImplementedError
+        raise RuntimeError("registrar_not_configured")
 
     def deregister(self, *, service: str, check_id: str | None = None) -> None:
-        raise NotImplementedError
+        raise RuntimeError("registrar_not_configured")

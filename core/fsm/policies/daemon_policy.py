@@ -64,11 +64,9 @@ class DaemonPolicy(BasePolicy):
             return self._ensure_mode(self._http)
 
         if state == StateEnum.SECURING:
-            # переход на HTTPS, если маркер выставлен (обычно bootstrap/tls policy)
-            if self._markers.has(self.HTTPS_MARKER):
-                return self._ensure_mode(self._https)
-            # если маркер ещё не выставлен — ждём
-            return self.retry(reason="https_mode_not_enabled_yet", missing=[self.HTTPS_MARKER])
+            # Переходим на HTTPS в состоянии SECURING.
+            # Валидность/наличие certs обеспечивает TlsPolicy, поэтому здесь нет дополнительных gate-маркеров.
+            return self._ensure_mode(self._https)
 
         if state == StateEnum.RUNNING:
             if not self._runner.is_alive():

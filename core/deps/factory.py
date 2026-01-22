@@ -15,17 +15,25 @@ from _interfaces import (
     ITLS,
 )
 
+from core.configs import Configs
+from core.fs import FS
+from core.logger import Logger
+from core.markers import Markers
+from core.net import Net
+from core.registrar import Registrar
+from core.tls import TLS
+
 from .deps import Deps
 
 
 class DepsFactory(BaseDepsFactory):
     """
-    Фабрика DI сборки Deps.
+    Фабрика DI сборки Deps (default).
 
-    Важно:
+    Инварианты:
     - Сборка детерминированная и идемпотентная.
     - Порядок сборки фиксирован: Configs → Logger → FS → Markers → Net → TLS → Registrar
-    - Реальные реализации пока задаются через методы build_* и будут расширяться адаптерами в следующих шагах.
+    - Реализации фасадов по умолчанию общие для всех сервисов.
     """
 
     def build(self) -> IDeps:
@@ -67,7 +75,6 @@ class DepsFactory(BaseDepsFactory):
                 )
             except Exception:
                 pass
-            # пробуем закрыть то, что уже было собрано
             for fn in reversed(close_hooks):
                 try:
                     fn()
@@ -75,25 +82,26 @@ class DepsFactory(BaseDepsFactory):
                     pass
             raise
 
-    # --- build steps (override points) ---
+    # --- build steps (default implementations) ---
 
     def build_configs(self) -> IConfigs:
-        raise NotImplementedError
+        return Configs.load()
 
     def build_logger(self, *, cfg: IConfigs) -> ILogger:
-        raise NotImplementedError
+        return Logger.from_configs(cfg=cfg)
 
     def build_fs(self, *, cfg: IConfigs, log: ILogger, close_hooks: List[Callable[[], None]]) -> IFS:
-        raise NotImplementedError
+        # close_hooks зарезервирован под будущие ресурсы, FS пока не требует явного close().
+        return FS.from_configs(cfg=cfg, log=log)
 
     def build_markers(self, *, cfg: IConfigs, log: ILogger, fs: IFS) -> IMarkers:
-        raise NotImplementedError
+        return Markers.from_configs(cfg=cfg, fs=fs, log=log)
 
     def build_net(self, *, cfg: IConfigs, log: ILogger) -> INet:
-        raise NotImplementedError
+        return Net.from_configs(cfg=cfg)
 
     def build_tls(self, *, cfg: IConfigs, log: ILogger, fs: IFS) -> ITLS:
-        raise NotImplementedError
+        return TLS.from_configs(cfg=cfg, fs=fs, log=log)
 
     def build_registrar(self, *, cfg: IConfigs, log: ILogger, net: INet) -> IRegistrar:
-        raise NotImplementedError
+        return Registrar.from_configs(cfg=cfg)
