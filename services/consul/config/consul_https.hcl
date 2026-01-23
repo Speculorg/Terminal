@@ -1,43 +1,53 @@
-datacenter = "dc1"
-node_name   = "consul"
-server      = true
+# source\services\consul\config\consul_https.hcl
+
+
+datacenter = "dc-1"
+node_name = "node-1"
+server = true
 bootstrap_expect = 1
+data_dir = "/consul/data"
+disable_update_check = true
 
-bind_addr   = "0.0.0.0"
+ui_config { enabled = true }
 
-# Runtime: HTTPS доступен в docker-сети/хосте (в TERM-1 на одном хосте).
-client_addr = "0.0.0.0"
-
-ui_config {
-  enabled = true
+addresses {
+  http = "0.0.0.0"
+  https = "0.0.0.0"
+  dns = "0.0.0.0"
 }
 
 ports {
-  http  = -1
+  http = 8500
   https = 8501
+  grpc = 8502
+  grpc_tls = 8503
+  dns = 8600
 }
 
-data_dir = "/consul/data"
-log_level = "INFO"
+acl {
+  enabled = true
+  default_policy = "deny"
+  enable_token_persistence = true
+}
 
 tls {
   defaults {
-    ca_file   = "/fs/terminal/certs/ca.crt"
+    ca_file = "/fs/terminal/certs/ca.crt"
     cert_file = "/fs/terminal/certs/consul.crt"
-    key_file  = "/fs/terminal/certs/consul.key"
-
+    key_file = "/fs/terminal/certs/privkey.pem"
     verify_incoming = true
     verify_outgoing = true
   }
 
   internal_rpc {
-    # Для single-node TERM-1 оставляем без проверки hostname.
-    verify_server_hostname = false
+    verify_server_hostname = true
+  }
+
+  https {
+    verify_incoming = true
   }
 }
 
-acl {
-  enabled                  = true
-  default_policy           = "deny"
-  enable_token_persistence = true
+auto_encrypt {
+  allow_tls = true
 }

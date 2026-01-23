@@ -1,27 +1,28 @@
-datacenter = "dc1"
-node_name   = "consul"
-server      = true
+# source\services\consul\config\consul_http.hcl
+
+
+datacenter = "dc-1"
+node_name = "node-1"
+server = true
 bootstrap_expect = 1
+data_dir = "/consul/data"
+disable_update_check = true
 
-bind_addr   = "0.0.0.0"
+ui_config { enabled = true }
 
-# Bootstrap-окно: HTTP только на loopback внутри контейнера.
-client_addr = "127.0.0.1"
-
-ui_config {
-  enabled = true
+addresses {
+  http = "0.0.0.0"
+  dns = "0.0.0.0"
 }
 
 ports {
-  http  = 8500
-  https = -1
+  http = 8500
+  grpc = 8502
+  dns = 8600
 }
 
-data_dir = "/consul/data"
-log_level = "INFO"
-
 acl {
-  enabled                  = true
-  default_policy           = "deny"
+  enabled = true
+  default_policy = "deny"
   enable_token_persistence = true
 }
