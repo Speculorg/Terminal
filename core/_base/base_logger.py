@@ -6,8 +6,8 @@ import sys
 import time
 from typing import Any, Mapping, Optional
 
-from _entities import EventCodeEnum, LogLevelEnum
-from _interfaces import ILogger
+from core._entities import EventCodeEnum, LogLevelEnum
+from core._interfaces import ILogger
 
 
 def _now_ms() -> int:

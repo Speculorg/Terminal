@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from _base import BaseRegistrar
-from _interfaces import IConfigs, IRegistrar
+from core._base import BaseRegistrar
+from core._interfaces import IConfigs, IRegistrar
 
-from registrar.adapters.consul_registrar import ConsulRegistrar
+from core.registrar.adapters.consul_registrar import ConsulRegistrar
 
 
 class Registrar(BaseRegistrar):

@@ -6,8 +6,8 @@ from typing import Optional, Sequence
 
 import requests
 
-from _base import BaseRegistrar
-from _interfaces import IConfigs
+from core._base import BaseRegistrar
+from core._interfaces import IConfigs
 
 
 def _token_from_cfg(cfg: IConfigs) -> Optional[str]:

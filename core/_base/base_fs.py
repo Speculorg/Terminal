@@ -6,7 +6,7 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
-from _interfaces import IFS
+from core._interfaces import IFS
 
 
 class BaseFS(IFS):

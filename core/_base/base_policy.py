@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from typing import Optional
 
-from _entities import ErrorCodeEnum, PolicyResultType, PolicyStatusEnum, StateEnum
-from _interfaces import IPolicy
+from core._entities import ErrorCodeEnum, PolicyResultType, PolicyStatusEnum, StateEnum
+from core._interfaces import IPolicy
 
 
 class BasePolicy(IPolicy):

@@ -2,7 +2,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Iterable
 
-from _interfaces import IFS, IMarkers
+from core._interfaces import IFS, IMarkers
 
 
 class BaseMarkers(IMarkers):

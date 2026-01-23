@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Callable, List, Optional
 
-from _interfaces import (
+from core._interfaces import (
     IConfigs,
     IDeps,
     IDepsFactory,

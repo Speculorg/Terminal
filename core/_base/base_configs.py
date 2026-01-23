@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Mapping, Optional
 
-from _interfaces import IConfigs
+from core._interfaces import IConfigs
 
 
 class BaseConfigs(IConfigs):

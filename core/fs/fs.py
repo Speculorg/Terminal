@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from _base import BaseFS
-from _entities import EventCodeEnum
-from _interfaces import IConfigs, ILogger
+from core._base import BaseFS
+from core._entities import EventCodeEnum
+from core._interfaces import IConfigs, ILogger
 
 
 class FS(BaseFS):

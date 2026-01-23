@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from _base import BaseNet
-from _interfaces import IConfigs
+from core._base import BaseNet
+from core._interfaces import IConfigs
 
 
 class Net(BaseNet):

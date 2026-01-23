@@ -1,6 +1,7 @@
 from __future__ import annotations
 from typing import Protocol, runtime_checkable, Any, Mapping, Optional
-from _entities import EventCodeEnum, LogLevelEnum
+
+from core._entities import EventCodeEnum, LogLevelEnum
 
 
 @runtime_checkable

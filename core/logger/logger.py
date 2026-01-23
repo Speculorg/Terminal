@@ -2,11 +2,11 @@ from __future__ import annotations
 
 from typing import Any, Mapping, Optional
 
-from _base import BaseLogger
-from _entities import EventCodeEnum, LogLevelEnum
-from _interfaces import IConfigs, ILogger
+from core._base import BaseLogger
+from core._entities import EventCodeEnum, LogLevelEnum
+from core._interfaces import IConfigs, ILogger
 
-from logger.adapters.json_logger import JsonLogger
+from core.logger.adapters.json_logger import JsonLogger
 
 
 class Logger(BaseLogger):

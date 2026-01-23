@@ -1,6 +1,7 @@
 from __future__ import annotations
 from typing import Protocol, runtime_checkable
-from _entities import StateEnum
+
+from core._entities import StateEnum
 
 
 @runtime_checkable

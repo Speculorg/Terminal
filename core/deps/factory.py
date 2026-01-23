@@ -2,9 +2,9 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Callable, List, Optional
 
-from _base import BaseDepsFactory
-from _entities import EventCodeEnum
-from _interfaces import (
+from core._base import BaseDepsFactory
+from core._entities import EventCodeEnum
+from core._interfaces import (
     IConfigs,
     IDeps,
     IFS,

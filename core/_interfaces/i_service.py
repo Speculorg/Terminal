@@ -1,7 +1,7 @@
 from __future__ import annotations
 from typing import Protocol, runtime_checkable
 
-from _entities import HealthSnapshotType
+from core._entities import HealthSnapshotType
 
 
 @runtime_checkable

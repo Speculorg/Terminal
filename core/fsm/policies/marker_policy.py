@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from typing import Mapping, Sequence
 
-from _base import BasePolicy
-from _entities import StateEnum
-from _interfaces import IMarkers
+from core._base import BasePolicy
+from core._entities import StateEnum
+from core._interfaces import IMarkers
 
 
 class MarkerPolicy(BasePolicy):

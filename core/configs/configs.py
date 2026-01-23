@@ -5,7 +5,7 @@ from hashlib import sha256
 from pathlib import Path
 from typing import Any, Dict, Mapping, Optional
 
-from _base import BaseConfigs
+from core._base import BaseConfigs
 
 from .model import (
     Model,

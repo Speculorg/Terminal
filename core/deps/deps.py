@@ -1,8 +1,8 @@
 from __future__ import annotations
 from typing import Callable, List, Optional
 
-from _base import BaseDeps
-from _interfaces import (
+from core._base import BaseDeps
+from core._interfaces import (
     IConfigs,
     IFS,
     ILogger,

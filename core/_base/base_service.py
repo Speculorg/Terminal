@@ -4,8 +4,8 @@ import time
 from pathlib import Path
 from typing import Any, Mapping, Optional, Sequence
 
-from _entities import HealthSnapshotType, StateEnum
-from _interfaces import IDeps, IDepsFactory, IFSM, IRunProfile, IService
+from core._entities import HealthSnapshotType, StateEnum
+from core._interfaces import IDeps, IDepsFactory, IFSM, IRunProfile, IService
 
 
 class BaseService(IService):

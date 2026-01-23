@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from _base import BaseMarkers
-from _entities import EventCodeEnum
-from _interfaces import IConfigs, IFS, ILogger
+from core._base import BaseMarkers
+from core._entities import EventCodeEnum
+from core._interfaces import IConfigs, IFS, ILogger
 
 
 class Markers(BaseMarkers):

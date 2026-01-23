@@ -4,7 +4,7 @@ import time
 from typing import Optional
 import requests
 
-from _interfaces import INet
+from core._interfaces import INet
 
 
 class BaseNet(INet):

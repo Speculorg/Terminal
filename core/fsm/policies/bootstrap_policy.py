@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from typing import Callable, Iterable, Optional
 
-from _base import BasePolicy
-from _entities import ErrorCodeEnum, StateEnum
-from _interfaces import IMarkers
+from core._base import BasePolicy
+from core._entities import ErrorCodeEnum, StateEnum
+from core._interfaces import IMarkers
 
 
 class BootstrapPolicy(BasePolicy):

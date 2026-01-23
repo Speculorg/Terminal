@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from _interfaces import IRegistrar
+from core._interfaces import IRegistrar
 
 
 class BaseRegistrar(IRegistrar):

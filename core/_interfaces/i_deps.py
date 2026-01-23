@@ -1,13 +1,13 @@
 from __future__ import annotations
 from typing import Protocol, runtime_checkable
 
-from _interfaces.i_configs import IConfigs
-from _interfaces.i_fs import IFS
-from _interfaces.i_logger import ILogger
-from _interfaces.i_markers import IMarkers
-from _interfaces.i_net import INet
-from _interfaces.i_registrar import IRegistrar
-from _interfaces.i_tls import ITLS
+from core._interfaces.i_configs import IConfigs
+from core._interfaces.i_fs import IFS
+from core._interfaces.i_logger import ILogger
+from core._interfaces.i_markers import IMarkers
+from core._interfaces.i_net import INet
+from core._interfaces.i_registrar import IRegistrar
+from core._interfaces.i_tls import ITLS
 
 
 @runtime_checkable

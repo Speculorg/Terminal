@@ -3,8 +3,8 @@ from __future__ import annotations
 import time
 from typing import Dict, Iterable, List, Mapping, Sequence
 
-from _entities import HealthSnapshotType, PolicyStatusEnum, StateEnum
-from _interfaces import IConfigs, ILogger, IMarkers, IPolicy
+from core._entities import HealthSnapshotType, PolicyStatusEnum, StateEnum
+from core._interfaces import IConfigs, ILogger, IMarkers, IPolicy
 
 
 class BaseFSM:
