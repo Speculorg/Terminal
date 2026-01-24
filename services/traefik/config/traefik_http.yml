@@ -1,0 +1,20 @@
+# Traefik static config (HTTP bootstrap window)
+# TERM-1: HTTP only on loopback inside container.
+
+log:
+  level: INFO
+
+api:
+  dashboard: true
+  insecure: true
+
+entryPoints:
+  web:
+    address: "127.0.0.1:8080"
+
+providers:
+  # В HTTP режиме достаточно поднять процесс.
+  # Реальная работа (routing) включается в HTTPS конфиге.
+  file:
+    directory: "/config"
+    watch: false
