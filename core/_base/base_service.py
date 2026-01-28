@@ -62,7 +62,8 @@ class BaseService(IService):
         """
         from core.fsm import FSM
         from core.fsm.daemon import DaemonRunner
-        from core.fsm.policies import BootstrapPolicy, DaemonPolicy, TlsPolicy
+        from core.fsm.policies import BootstrapPolicy, DaemonPolicy, TlsPolicy, RegistrarPolicy
+        from core.fsm.policies.registrar_policy import RegistrarSpec
 
         stage_gates_raw = getattr(self._run_profile, "stage_gates", {}) or {}
         start_cmd_raw = getattr(self._run_profile, "start_cmd", {}) or {}
@@ -100,6 +101,19 @@ class BaseService(IService):
             start_cmd={"http": http_cmd, "https": https_cmd},
         )
 
+
+        registrar_policy = RegistrarPolicy(
+            cfg=deps.cfg,
+            registrar=deps.registrar,
+            spec=RegistrarSpec(
+                service=svc_name,
+                address=svc_name,
+                port=int(getattr(deps.cfg, "service_port", deps.cfg.get("SERVICE_PORT", 0)) or 0),
+                tags=tuple(getattr(deps.cfg, "service_tags", ())) or tuple(getattr(getattr(deps.cfg, "model", None), "context", None).tags if getattr(deps.cfg, "model", None) else ()),
+                ttl_seconds=int(deps.cfg.get("REGISTRAR_TTL_SEC", 15) or 15),
+            ),
+        )
+
         bootstrap_fn = getattr(self._run_profile, "bootstrap_fn", None)
         bootstrap_done = tuple(getattr(self._run_profile, "bootstrap_done_markers", ()) or ())
 
@@ -118,7 +132,8 @@ class BaseService(IService):
         policy_matrix: dict[StateEnum, Sequence[Any]] = {
             StateEnum.INITIALIZING: (daemon_policy,),
             StateEnum.BOOTSTRAPPING: tuple(boot_policies),
-            StateEnum.RUNNING: (daemon_policy,),
+            StateEnum.REGISTERING: (registrar_policy, daemon_policy),
+            StateEnum.RUNNING: (registrar_policy, daemon_policy),
             StateEnum.STOPPING: (daemon_policy,),
         }
 

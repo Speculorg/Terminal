@@ -19,7 +19,7 @@ class VaultRunProfile(IRunProfile):
         # Vault сам себе не зависит (bootstrap делает init/unseal/PKI и пишет PEM в FS).
         # REGISTERING оставляем пустым на TERM-1.
         return {
-            StateEnum.SECURING.value: ("vault_init.done", "vault_initial_pem.done"),
+            StateEnum.SECURING.value: ("vault_init", "vault_initial_pem"),
         }
 
     @property
@@ -30,7 +30,7 @@ class VaultRunProfile(IRunProfile):
         }
 
     # Duck-typing hooks, используемые BaseService.build_fsm()
-    bootstrap_done_markers = ("vault_init.done", "vault_initial_pem.done")
+    bootstrap_done_markers = ("vault_init", "vault_initial_pem")
     bootstrap_fn = staticmethod(vault_bootstrap)
 
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass
 from typing import Optional, Sequence
 
@@ -22,10 +23,9 @@ class RegistrarPolicy(BasePolicy):
     """
     RegistrarPolicy регистрирует сервис и поддерживает TTL heartbeat.
 
-    Семантика:
-    - REGISTERING: делает register()
-    - RUNNING: делает heartbeat()
-    
+    Семантика TERM-1:
+    - REGISTERING: register()
+    - RUNNING: heartbeat() с троттлингом по REGISTRAR_HEARTBEAT_PERIOD_SEC
     """
 
     def __init__(self, *, cfg: IConfigs, registrar: IRegistrar, spec: RegistrarSpec) -> None:
@@ -34,8 +34,19 @@ class RegistrarPolicy(BasePolicy):
         self._registrar = registrar
         self._spec = spec
 
-        # deterministic check_id if not set
         self._check_id = spec.check_id or f"service:{spec.service}:ttl"
+        self._last_hb_ms: int = 0
+
+    @staticmethod
+    def _now_ms() -> int:
+        return int(time.time() * 1000)
+
+    def _hb_period_ms(self) -> int:
+        try:
+            sec = int(self._cfg.get("REGISTRAR_HEARTBEAT_PERIOD_SEC", 7) or 7)
+        except Exception:
+            sec = 7
+        return max(1000, sec * 1000)
 
     def _run_impl(self, *, state: StateEnum):
         try:
@@ -51,14 +62,16 @@ class RegistrarPolicy(BasePolicy):
                 return self.ok(details={"registered": True, "check_id": self._check_id})
 
             if state == StateEnum.RUNNING:
-                # heartbeat период контролируется тиком FSM или отдельным таймером (позже)
+                now = self._now_ms()
+                if self._last_hb_ms and (now - self._last_hb_ms) < self._hb_period_ms():
+                    return self.ok(details={"skip": True, "reason": "heartbeat_throttled"})
                 self._registrar.heartbeat(check_id=self._check_id)
+                self._last_hb_ms = now
                 return self.ok(details={"heartbeat": True, "check_id": self._check_id})
 
             return self.ok(details={"skip": True})
 
         except RuntimeError as e:
-            # нормализованный runtime error от ConsulRegistrar
             return self.retry(reason=str(e))
-        except Exception as e:
-            return self.fail(error_code=ErrorCodeEnum.ERR_REGISTRY, reason=f"registrar_error:{type(e).__name__}")
+        except Exception:
+            return self.fail(error_code=ErrorCodeEnum.ERR_REGISTRY, reason="registrar_error")

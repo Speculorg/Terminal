@@ -60,18 +60,23 @@ def consul_bootstrap(*, cfg: IConfigs, fs: IFS, markers: IMarkers, log: Optional
        - FS_SECRETS_DIR/root_consul_token.json
        - FS_SECRETS_DIR/consul_acl_bootstrap_token.json (совместимость)
 
-    2) Минимальные политики + токены сервисов (статичные на TERM-1):
+    2) Минимальные политики + токены сервисов (TERM-1, статичные):
        - consul_token_for_consul
        - consul_token_for_vault
        - consul_token_for_traefik
 
-    3) Установка agent/default токена для Consul-агента (чтобы не было anonymous-операций).
+       Политики (важно):
+       - для Vault/Traefik разрешён agent_prefix write (вариант 1),
+         чтобы работали TTL регистрации и /v1/agent/check/pass.
+
+    3) Установка agent token для Consul агента (чтобы не было anonymous операций).
+       default token НЕ задаём (минимизация поверхности).
 
     Важно:
     - Маркеры НЕ выставляются здесь (это делает BootstrapPolicy ядра).
-    - Функция обязана падать с исключением, если после выполнения нет обязательных артефактов.
+    - Функция должна падать, если после выполнения нет обязательных артефактов.
     """
-    _ = markers, log  # не используем напрямую в bootstrap_fn
+    _ = markers  # выставляет BootstrapPolicy
 
     secrets_dir = Path(str(cfg.get("FS_SECRETS_DIR", "/fs/terminal/secrets")))
     fs.ensure_dir(secrets_dir)
@@ -87,6 +92,10 @@ def consul_bootstrap(*, cfg: IConfigs, fs: IFS, markers: IMarkers, log: Optional
 
     consul_http_port = int(cfg.get("CONSUL_HTTP_PORT", 8500))
     base = f"http://127.0.0.1:{consul_http_port}"
+
+    if log:
+        log.info("consul_bootstrap:start", fields={"base": base, "secrets_dir": str(secrets_dir)})
+
     _wait_ready(base)
 
     def _load_root_token() -> str:
@@ -99,6 +108,8 @@ def consul_bootstrap(*, cfg: IConfigs, fs: IFS, markers: IMarkers, log: Optional
     root_token = _load_root_token()
 
     if not root_token:
+        if log:
+            log.info("consul_bootstrap:acl_bootstrap", fields={"url": f"{base}/v1/acl/bootstrap"})
         data = _req_json("PUT", f"{base}/v1/acl/bootstrap", ok=(200,), timeout_s=10.0)
         if "SecretID" not in data:
             raise RuntimeError("consul_acl_bootstrap_missing_secretid")
@@ -108,6 +119,9 @@ def consul_bootstrap(*, cfg: IConfigs, fs: IFS, markers: IMarkers, log: Optional
 
     if not root_token:
         raise RuntimeError("consul_acl_bootstrap_missing_root_token")
+
+    if log:
+        log.info("consul_bootstrap:root_token_ok", fields={"stored": True})
 
     # --- policies (upsert) ---
 
@@ -123,24 +137,25 @@ def consul_bootstrap(*, cfg: IConfigs, fs: IFS, markers: IMarkers, log: Optional
             ),
         },
         "vault-policy": {
-            "Description": "Vault storage policy (TERM-1)",
+            "Description": "Vault storage + TTL registration policy (TERM-1)",
             "Rules": (
                 'key_prefix "vault/" { policy = "write" }\n'
                 'service "vault" { policy = "write" }\n'
-                'session_prefix "" { policy = "write" }\n'
-                'node_prefix "" { policy = "read" }\n'
-                'agent_prefix "" { policy = "read" }\n'
                 'service_prefix "" { policy = "read" }\n'
+                'node_prefix "" { policy = "read" }\n'
+                'agent_prefix "" { policy = "write" }\n'
+                'session_prefix "" { policy = "write" }\n'
             ),
         },
         "traefik-policy": {
-            "Description": "Traefik read-only policy (TERM-1)",
+            "Description": "Traefik catalog read + TTL registration policy (TERM-1)",
             "Rules": (
+                'service "traefik" { policy = "write" }\n'
                 'service_prefix "" { policy = "read" }\n'
                 'node_prefix "" { policy = "read" }\n'
-                'agent_prefix "" { policy = "read" }\n'
+                'agent_prefix "" { policy = "write" }\n'
+                'session_prefix "" { policy = "write" }\n'
                 'key_prefix "" { policy = "read" }\n'
-                'session_prefix "" { policy = "read" }\n'
             ),
         },
     }
@@ -183,6 +198,8 @@ def consul_bootstrap(*, cfg: IConfigs, fs: IFS, markers: IMarkers, log: Optional
         )
 
     for name, p in policies.items():
+        if log:
+            log.info("consul_bootstrap:policy_upsert", fields={"policy": name})
         _policy_upsert(name, p["Description"], p["Rules"])
 
     # --- tokens (ensure on disk) ---
@@ -190,7 +207,13 @@ def consul_bootstrap(*, cfg: IConfigs, fs: IFS, markers: IMarkers, log: Optional
     def _ensure_token(kind: str, policy_name: str) -> None:
         path = token_files[kind]
         if fs.exists(path) and fs.read_text(path).strip():
+            if log:
+                log.info("consul_bootstrap:token_exists", fields={"kind": kind, "file": str(path)})
             return
+
+        if log:
+            log.info("consul_bootstrap:token_create", fields={"kind": kind, "policy": policy_name})
+
         created = _req_json(
             "PUT",
             f"{base}/v1/acl/token",
@@ -212,24 +235,23 @@ def consul_bootstrap(*, cfg: IConfigs, fs: IFS, markers: IMarkers, log: Optional
         if not fs.exists(p) or not fs.read_text(p).strip():
             raise RuntimeError(f"missing_token_file:{p.name}")
 
-    # --- set agent/default tokens to avoid anonymous requests ---
+    # --- set agent token to avoid anonymous internal calls ---
 
     consul_token = fs.read_text(token_files["consul"]).strip()
     if not consul_token:
         raise RuntimeError("empty_consul_agent_token")
 
-    def _set_agent_token(token_type: str, token_value: str) -> None:
-        _req_json(
-            "PUT",
-            f"{base}/v1/agent/token/{token_type}",
-            token=root_token,
-            payload={"Token": token_value},
-            ok=(200,),
-            timeout_s=5.0,
-        )
+    if log:
+        log.info("consul_bootstrap:set_agent_token")
 
-    # agent token: internal agent operations
-    _set_agent_token("agent", consul_token)
+    _req_json(
+        "PUT",
+        f"{base}/v1/agent/token/agent",
+        token=root_token,
+        payload={"Token": consul_token},
+        ok=(200,),
+        timeout_s=5.0,
+    )
 
-    # default token: requests without X-Consul-Token will use this token (otherwise anonymous)
-    _set_agent_token("default", consul_token)
+    if log:
+        log.info("consul_bootstrap:done")

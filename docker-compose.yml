@@ -50,7 +50,7 @@ services:
       PYTHONUNBUFFERED: "1"
       SERVICE_NAME: "consul"
       SERVICE_PORT: 8501
-      SERVICE_TAGS: "infra,kv,core"
+      SERVICE_TAGS: "infra,kv,core,traefik.enable=true,traefik.http.routers.consul-ui.rule=Host(`consul.terminal.speculorg.localhost`),traefik.http.routers.consul-ui.entrypoints=websecure,traefik.http.routers.consul-ui.tls=true,traefik.http.services.consul-ui.loadbalancer.server.port=8501"
       CONSUL_HTTP_TOKEN_FILE: "/fs/terminal/secrets/consul_token_for_consul"
     volumes:
       - ./configs.env:/configs.env:ro
@@ -66,12 +66,6 @@ services:
     ports:
       - "8500:8500"
       - "8501:8501"
-    labels:
-      - "traefik.enable=true"
-      - "traefik.http.routers.consul-ui.rule=Host(`consul.terminal.speculorg.localhost`)"
-      - "traefik.http.routers.consul-ui.entrypoints=websecure"
-      - "traefik.http.routers.consul-ui.tls=true"
-      - "traefik.http.services.consul-ui.loadbalancer.server.port=8501"
     restart: unless-stopped
 
   vault:
@@ -89,7 +83,7 @@ services:
       PYTHONUNBUFFERED: "1"
       SERVICE_NAME: "vault"
       SERVICE_PORT: 8200
-      SERVICE_TAGS: "infra,ca,core"
+      SERVICE_TAGS: "infra,ca,core,traefik.enable=true,traefik.http.routers.vault-ui.rule=Host(`vault.terminal.speculorg.localhost`),traefik.http.routers.vault-ui.entrypoints=websecure,traefik.http.routers.vault-ui.tls=true,traefik.http.services.vault-ui.loadbalancer.server.port=8200"
       CONSUL_HTTP_TOKEN_FILE: "/fs/terminal/secrets/consul_token_for_vault"
     volumes:
       - ./configs.env:/configs.env:ro
@@ -103,12 +97,6 @@ services:
       - net_private
     ports:
       - "8200:8200"
-    labels:
-      - "traefik.enable=true"
-      - "traefik.http.routers.vault-ui.rule=Host(`vault.terminal.speculorg.localhost`)"
-      - "traefik.http.routers.vault-ui.entrypoints=websecure"
-      - "traefik.http.routers.vault-ui.tls=true"
-      - "traefik.http.services.vault-ui.loadbalancer.server.port=8200"
     restart: unless-stopped
 
   traefik:
@@ -124,7 +112,7 @@ services:
       PYTHONUNBUFFERED: "1"
       SERVICE_NAME: "traefik"
       SERVICE_PORT: 8443
-      SERVICE_TAGS: "infra,edge,core"
+      SERVICE_TAGS: "infra,edge,core,traefik.enable=true,traefik.http.routers.traefik.rule=Host(`traefik.terminal.speculorg.localhost`),traefik.http.routers.traefik.entrypoints=websecure,traefik.http.routers.traefik.service=api@internal,traefik.http.routers.traefik.tls=true"
       CONSUL_HTTP_TOKEN_FILE: "/fs/terminal/secrets/consul_token_for_traefik"
     volumes:
       - ./configs.env:/configs.env:ro
@@ -137,12 +125,5 @@ services:
       - net_private
       - net_public
     ports:
-      - "8080:8080"
       - "8443:8443"
-    labels:
-      - "traefik.enable=true"
-      - "traefik.http.routers.traefik.rule=Host(`traefik.terminal.speculorg.localhost`)"
-      - "traefik.http.routers.traefik.entrypoints=websecure"
-      - "traefik.http.routers.traefik.service=api@internal"
-      - "traefik.http.routers.traefik.tls=true"
     restart: unless-stopped

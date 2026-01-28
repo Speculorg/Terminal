@@ -17,7 +17,7 @@ addresses {
 }
 
 ports {
-  http = 8500
+  http = -1
   https = 8501
   grpc = 8502
   grpc_tls = 8503

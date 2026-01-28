@@ -19,8 +19,8 @@ class ConsulRunProfile(IRunProfile):
         # В TERM-1 Consul зависит от Vault PKI (CA + initial PEM), чтобы перейти в SECURING/HTTPS.
         # REGISTERING можно использовать позже для согласования с другими шагами (например, токены/ACL).
         return {
-            StateEnum.SECURING.value: ("vault_init.done", "vault_initial_pem.done"),
-            StateEnum.REGISTERING.value: ("consul_tokens.done", "vault_initial_pem.done"),
+            StateEnum.SECURING.value: ("vault_init", "vault_initial_pem"),
+            StateEnum.REGISTERING.value: ("consul_tokens", "vault_initial_pem"),
         }
 
     @property
@@ -31,7 +31,7 @@ class ConsulRunProfile(IRunProfile):
         }
 
     # Duck-typing hooks, используемые BaseService.build_fsm()
-    bootstrap_done_markers = ("consul_bootstrap.done", "consul_tokens.done")
+    bootstrap_done_markers = ("consul_bootstrap", "consul_tokens")
     bootstrap_fn = staticmethod(consul_bootstrap)
 
 

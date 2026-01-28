@@ -1,24 +1,9 @@
 # Dynamic configuration (secure mode)
 #
-# Routers:
-# - traefik.terminal.local -> dashboard
-# - consul.terminal.local  -> Consul HTTPS (mTLS upstream)
-# - vault.terminal.local   -> Vault HTTPS (mTLS upstream)
-#
-# TLS:
-# - Default certificate: traefik.crt/traefik.key
-# - Inbound client auth: RequireAndVerifyClientCert using the shared CA
-#
-# Upstream mTLS:
-# - Uses traefik.pem (cert+key) as client cert for Vault/Consul.
+# Only shared TLS/mTLS options and upstream transports live here.
+# Routers/services are discovered via Consul Catalog provider.
 
 tls:
-  stores:
-    default:
-      defaultCertificate:
-        certFile: /fs/terminal/certs/traefik.crt
-        keyFile: /fs/terminal/certs/traefik.key
-
   options:
     mtls:
       clientAuth:
@@ -26,45 +11,10 @@ tls:
           - /fs/terminal/certs/ca.crt
         clientAuthType: RequireAndVerifyClientCert
 
-http:
-  serversTransports:
-    mtls-upstream:
-      rootcas:
-        - /fs/terminal/certs/ca.crt
-      certificates:
-        - /fs/terminal/certs/traefik.pem
-
-  routers:
-    traefik:
-      rule: Host(`traefik.terminal.local`)
-      entryPoints:
-        - websecure
-      service: api@internal
-      tls: {}
-
-    consul:
-      rule: Host(`consul.terminal.local`)
-      entryPoints:
-        - websecure
-      service: consul
-      tls: {}
-
-    vault:
-      rule: Host(`vault.terminal.local`)
-      entryPoints:
-        - websecure
-      service: vault
-      tls: {}
-
-  services:
-    consul:
-      loadBalancer:
-        servers:
-          - url: https://consul:8501
-        serversTransport: mtls-upstream
-
-    vault:
-      loadBalancer:
-        servers:
-          - url: https://vault:8200
-        serversTransport: mtls-upstream
+serversTransports:
+  default:
+    rootCAs:
+      - /fs/terminal/certs/ca.crt
+    certificates:
+      - certFile: /fs/terminal/certs/traefik.crt
+        keyFile: /fs/terminal/certs/traefik.key

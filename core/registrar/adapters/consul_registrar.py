@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from typing import Optional, Sequence
+from pathlib import Path
+from typing import Optional, Sequence, Tuple
 
 import requests
 
@@ -11,7 +12,7 @@ from core._interfaces import IConfigs
 
 
 def _token_from_cfg(cfg: IConfigs) -> Optional[str]:
-    # 1) если Configs уже заполняет cfg.model.context.consul_token
+    # 1) cfg.model.context.consul_token (preferred)
     try:
         model = getattr(cfg, "model", None)
         if model and getattr(model, "context", None) and getattr(model.context, "consul_token", None):
@@ -19,7 +20,7 @@ def _token_from_cfg(cfg: IConfigs) -> Optional[str]:
     except Exception:
         pass
 
-    # 2) fallback на ключи окружения
+    # 2) fallback to env key
     try:
         v = cfg.get("CONSUL_HTTP_TOKEN", None)
         return str(v) if v else None
@@ -33,6 +34,8 @@ class ConsulConn:
     host: str
     port: int
     token: Optional[str]
+    tls_verify: Optional[str] = None  # ca file path
+    tls_cert: Optional[Tuple[str, str]] = None  # (cert_file, key_file)
 
     def base_url(self) -> str:
         return f"{self.scheme}://{self.host}:{self.port}"
@@ -42,10 +45,9 @@ class ConsulRegistrar(BaseRegistrar):
     """
     Consul registrar via Agent HTTP API.
 
-    TERM-1 особенности:
-    - допускается HTTP на loopback в bootstrap-окно (но здесь мы просто строим URL по cfg)
-    - ошибки сети не должны “вылетать” как неконтролируемые исключения из глубины requests
-      (но регистратор может бросать RuntimeError с понятной причиной наверх — политики решат RETRY/FAIL)
+    TERM-1:
+    - после bootstrap ожидается HTTPS + mTLS
+    - все ошибки requests нормализуются в RuntimeError для RETRY в политиках
     """
 
     def __init__(self, *, conn: ConsulConn, timeout_ms: int = 3000) -> None:
@@ -54,15 +56,40 @@ class ConsulRegistrar(BaseRegistrar):
 
     @classmethod
     def from_configs(cls, *, cfg: IConfigs) -> "ConsulRegistrar":
-        # TERM-1: по умолчанию http (bootstrap-совместимость), https подключится позже политиками/конфигом.
-        scheme = str(cfg.get("CONSUL_SCHEME", "http"))
+        # По умолчанию: HTTPS (TERM-1 secure). HTTP допустим только если явно задан CONSUL_SCHEME=http.
+        scheme = str(cfg.get("CONSUL_SCHEME", "https")).strip() or "https"
         host = str(cfg.get("CONSUL_HOST", "consul"))
-        port = int(cfg.get("CONSUL_HTTP_PORT", 8500) or 8500)
+        if scheme == "https":
+            port = int(cfg.get("CONSUL_HTTPS_PORT", 8501) or 8501)
+        else:
+            port = int(cfg.get("CONSUL_HTTP_PORT", 8500) or 8500)
 
         token = _token_from_cfg(cfg)
         timeout_ms = int(cfg.get("CONSUL_REQUEST_TIMEOUT_MS", 3000) or 3000)
 
-        conn = ConsulConn(scheme=scheme, host=host, port=port, token=token)
+        tls_verify: Optional[str] = None
+        tls_cert: Optional[Tuple[str, str]] = None
+
+        if scheme == "https":
+            certs_dir = Path(str(cfg.get("FS_CERTS_DIR", "/fs/terminal/certs")))
+            ca_file = certs_dir / "ca.crt"
+
+            # сервис регистрирует себя -> используем leaf cert сервиса
+            svc_name = getattr(cfg, "service_name", None) or str(cfg.get("SERVICE_NAME", "unknown"))
+            cert_file = certs_dir / f"{svc_name}.crt"
+            key_file = certs_dir / f"{svc_name}.key"
+
+            tls_verify = str(ca_file)
+            tls_cert = (str(cert_file), str(key_file))
+
+        conn = ConsulConn(
+            scheme=scheme,
+            host=host,
+            port=port,
+            token=token,
+            tls_verify=tls_verify,
+            tls_cert=tls_cert,
+        )
         return cls(conn=conn, timeout_ms=timeout_ms)
 
     # --- IRegistrar ---
@@ -129,9 +156,17 @@ class ConsulRegistrar(BaseRegistrar):
     def _url(self, path: str) -> str:
         return self._conn.base_url() + path
 
+    def _req_kwargs(self) -> dict:
+        kw = {"timeout": self._timeout_s}
+        if self._conn.tls_verify:
+            kw["verify"] = self._conn.tls_verify
+        if self._conn.tls_cert:
+            kw["cert"] = self._conn.tls_cert
+        return kw
+
     def _put(self, path: str) -> None:
         try:
-            r = requests.put(self._url(path), headers=self._headers(), timeout=self._timeout_s)
+            r = requests.put(self._url(path), headers=self._headers(), **self._req_kwargs())
             if r.status_code >= 300:
                 raise RuntimeError(f"consul_http_error:{r.status_code}:{(r.text or '')[:256]}")
         except requests.RequestException as e:
@@ -140,7 +175,7 @@ class ConsulRegistrar(BaseRegistrar):
     def _put_json(self, path: str, payload: dict[str, object]) -> None:
         try:
             data = json.dumps(payload, ensure_ascii=False)
-            r = requests.put(self._url(path), data=data, headers=self._headers(), timeout=self._timeout_s)
+            r = requests.put(self._url(path), data=data, headers=self._headers(), **self._req_kwargs())
             if r.status_code >= 300:
                 raise RuntimeError(f"consul_http_error:{r.status_code}:{(r.text or '')[:256]}")
         except requests.RequestException as e:
@@ -152,7 +187,6 @@ class ConsulRegistrar(BaseRegistrar):
 
     @staticmethod
     def _service_id(service: str, check_id: str | None) -> str:
-        # Service ID должен быть стабильным; check_id влияет только если ты хочешь разные регистрации.
         if check_id:
             return f"{service}:{check_id}"
         return service

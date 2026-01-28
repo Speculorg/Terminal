@@ -90,6 +90,9 @@ def vault_bootstrap(*, cfg: IConfigs, fs: IFS, markers: IMarkers, log: Optional[
     - Маркеры НЕ выставляются здесь (это делает BootstrapPolicy ядра).
     - Функция обязана падать с исключением, если после выполнения нет обязательных артефактов.
     """
+    if log:
+        log.info("vault_bootstrap:start")
+
     _ = markers, log  # не используем напрямую в bootstrap_fn
 
     secrets_dir = Path(cfg.get("FS_SECRETS_DIR"))
@@ -102,6 +105,8 @@ def vault_bootstrap(*, cfg: IConfigs, fs: IFS, markers: IMarkers, log: Optional[
     vault_http_port = int(cfg.get("VAULT_HTTP_PORT"))
     base = f"http://127.0.0.1:{vault_http_port}"
 
+    if log:
+        log.info("vault_bootstrap:wait_ready", fields={"base": base})
     _wait_http_ready(base)
 
     if fs.exists(init_json):
