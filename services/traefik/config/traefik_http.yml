@@ -1,8 +1,11 @@
-# Traefik static config (HTTP bootstrap window)
-# TERM-1: HTTP only on loopback inside container.
-
+# Static configuration (bootstrap window; HTTP only)
+#
+# - Bound to localhost to avoid exposing the bootstrap window outside of the container network.
+# - Dashboard is enabled for debugging inside the container.
 log:
   level: INFO
+
+accessLog: {}
 
 api:
   dashboard: true
@@ -13,8 +16,6 @@ entryPoints:
     address: "127.0.0.1:8080"
 
 providers:
-  # В HTTP режиме достаточно поднять процесс.
-  # Реальная работа (routing) включается в HTTPS конфиге.
   file:
-    directory: "/config"
-    watch: false
+    directory: /config
+    watch: true

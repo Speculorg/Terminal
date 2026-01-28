@@ -1,59 +1,32 @@
-# source\services\traefik\config\traefik.yml
-
-
-global:
-  checkNewVersion: false
-  sendAnonymousUsage: false
-
+# Static configuration (secure mode)
+#
+# - No Docker provider (no docker.sock mount).
+# - Dynamic config is loaded via the file provider from /config (see dynamic_https.yml).
+# - After bootstrap window: inbound TLS + mTLS (client auth) enforced via tls options from file provider.
 
 log:
   level: INFO
 
+accessLog: {}
 
 api:
   dashboard: true
-  insecure: false
-
-
-ping:
-  entryPoint: web
-
 
 entryPoints:
   web:
-    address: :80
+    address: ":8080"
     http:
       redirections:
         entryPoint:
           to: websecure
           scheme: https
-          permanent: true
-  
   websecure:
-    address: :443
-
-
-tls:
-  certificates:
-    - certFile: /certs/traefik.crt
-      keyFile:  /certs/privkey.pem
-  options:
-    default:
-      minVersion: VersionTLS12
-      sniStrict:  true
-
+    address: ":8443"
+    http:
+      tls:
+        options: mtls@file
 
 providers:
-  consulCatalog:
-    endpoint:
-      scheme: https
-      address: consul:8501
-      tls:
-        ca:   /fs/terminal/certs/ca.crt
-        cert: /fs/terminal/certs/traefik.crt
-        key:  /fs/terminal/certs/privkey.pem
-        insecureSkipVerify: false
+  file:
+    directory: /config
     watch: true
-    exposedByDefault: false
-    prefix: traefik
-    refreshInterval: 15s

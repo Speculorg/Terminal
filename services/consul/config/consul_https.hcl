@@ -34,13 +34,13 @@ tls {
   defaults {
     ca_file = "/fs/terminal/certs/ca.crt"
     cert_file = "/fs/terminal/certs/consul.crt"
-    key_file = "/fs/terminal/certs/privkey.pem"
+    key_file = "/fs/terminal/certs/consul.key"
     verify_incoming = true
     verify_outgoing = true
   }
 
   internal_rpc {
-    verify_server_hostname = true
+    verify_server_hostname = false
   }
 
   https {

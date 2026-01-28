@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -8,169 +9,207 @@ import requests
 from core._interfaces import IConfigs, IFS, ILogger, IMarkers
 
 
-def _http_get_json(url: str, *, headers: Optional[Dict[str, str]] = None, timeout_ms: int = 2000) -> Dict[str, Any]:
-    r = requests.get(url, headers=headers or {}, timeout=max(0.2, timeout_ms / 1000.0))
-    if r.status_code >= 300:
-        raise RuntimeError(f"http_error:{r.status_code}:{(r.text or '')[:256]}")
-    return r.json() if r.text else {}
-
-
-def _http_put_json(url: str, payload: Dict[str, Any], *, headers: Optional[Dict[str, str]] = None, timeout_ms: int = 2000) -> Dict[str, Any]:
-    r = requests.put(url, json=payload, headers=headers or {}, timeout=max(0.2, timeout_ms / 1000.0))
-    if r.status_code >= 300:
-        raise RuntimeError(f"http_error:{r.status_code}:{(r.text or '')[:256]}")
-    return r.json() if r.text else {}
-
-
-def _http_post_json(url: str, payload: Dict[str, Any], *, headers: Optional[Dict[str, str]] = None, timeout_ms: int = 2000) -> Dict[str, Any]:
-    r = requests.post(url, json=payload, headers=headers or {}, timeout=max(0.2, timeout_ms / 1000.0))
-    if r.status_code >= 300:
-        raise RuntimeError(f"http_error:{r.status_code}:{(r.text or '')[:256]}")
-    return r.json() if r.text else {}
-
-
 def _vault_headers(token: str) -> Dict[str, str]:
     return {"X-Vault-Token": token}
 
 
+def _http_get(url: str, *, headers: Optional[Dict[str, str]] = None, timeout_s: float = 2.0) -> requests.Response:
+    return requests.get(url, headers=headers or {}, timeout=timeout_s)
+
+
+def _http_put_json(
+    url: str,
+    payload: Dict[str, Any],
+    *,
+    headers: Optional[Dict[str, str]] = None,
+    timeout_s: float = 5.0,
+    ok: tuple[int, ...] = (200,),
+) -> Dict[str, Any]:
+    r = requests.put(url, json=payload, headers=headers or {}, timeout=timeout_s)
+    if r.status_code not in ok:
+        raise RuntimeError(f"vault_http_error:{r.status_code}:{(r.text or '')[:256]}")
+    return r.json() if r.text else {}
+
+
+def _http_post_json(
+    url: str,
+    payload: Dict[str, Any],
+    *,
+    headers: Optional[Dict[str, str]] = None,
+    timeout_s: float = 5.0,
+    ok: tuple[int, ...] = (200, 204),
+) -> Dict[str, Any]:
+    r = requests.post(url, json=payload, headers=headers or {}, timeout=timeout_s)
+    if r.status_code not in ok:
+        raise RuntimeError(f"vault_http_error:{r.status_code}:{(r.text or '')[:256]}")
+    return r.json() if r.text else {}
+
+
+def _wait_http_ready(base: str, *, timeout_s: float = 60.0) -> None:
+    t0 = time.time()
+    while True:
+        try:
+            r = _http_get(f"{base}/v1/sys/health", timeout_s=2.0)
+            if r.status_code in (200, 429, 472, 473, 501, 503) and (r.text or ""):
+                return
+        except Exception:
+            pass
+
+        if time.time() - t0 >= timeout_s:
+            raise RuntimeError("vault_not_ready")
+
+        time.sleep(0.5)
+
+
+def _read_ca_pem(base: str) -> str:
+    r = _http_get(f"{base}/v1/pki/ca/pem", timeout_s=5.0)
+    if r.status_code != 200:
+        raise RuntimeError(f"vault_ca_read_error:{r.status_code}:{(r.text or '')[:128]}")
+    return r.text
+
+
+def _write_pem_bundle(fs: IFS, *, cert_path: Path, key_path: Path, out_path: Path) -> None:
+    cert = fs.read_text(cert_path).strip()
+    key = fs.read_text(key_path).strip()
+    if not cert or not key:
+        raise RuntimeError(f"empty_leaf_parts:{out_path.name}")
+    fs.write_text_atomic(out_path, cert + "\n" + key + "\n")
+
+
 def vault_bootstrap(*, cfg: IConfigs, fs: IFS, markers: IMarkers, log: Optional[ILogger] = None) -> None:
     """
-    TERM-1 bootstrap для Vault:
-    - init (1 share / 1 threshold) и сохранение root token + unseal key(s) в secrets_dir
+    TERM-1 bootstrap для Vault (идемпотентно):
+
+    - init (1/1) и сохранение (root token + unseal key) в FS_SECRETS_DIR/vault_init.json
     - unseal (если sealed)
-    - включение PKI root и генерация CA
-    - выпуск initial leaf certs (vault, consul) и запись PEM в certs_dir
-    - выставляет: vault_init.done, vault_initial_pem.done
+    - PKI root (CA) + role
+    - выпуск initial leaf certs (TTL 24h): vault, consul, traefik
+      + запись: ca.crt, <name>.crt, <name>.key, <name>.pem в FS_CERTS_DIR
 
-    Принцип: строго идемпотентно, без ручных шагов.
+    Важно:
+    - Маркеры НЕ выставляются здесь (это делает BootstrapPolicy ядра).
+    - Функция обязана падать с исключением, если после выполнения нет обязательных артефактов.
     """
-    if markers.has("vault_init.done") and markers.has("vault_initial_pem.done"):
-        return
+    _ = markers, log  # не используем напрямую в bootstrap_fn
 
-    secrets_dir = Path(str(cfg.get("FS_SECRETS_DIR", "/fs/terminal/secrets")))
-    certs_dir = Path(str(cfg.get("FS_CERTS_DIR", "/fs/terminal/certs")))
+    secrets_dir = Path(cfg.get("FS_SECRETS_DIR"))
+    certs_dir = Path(cfg.get("FS_CERTS_DIR"))
     fs.ensure_dir(secrets_dir)
     fs.ensure_dir(certs_dir)
 
-    init_file = secrets_dir / "vault_init.json"
+    init_json = secrets_dir / "vault_init.json"
 
-    base = f"http://127.0.0.1:{int(cfg.get('VAULT_HTTP_PORT', 8200) or 8200)}"
+    vault_http_port = int(cfg.get("VAULT_HTTP_PORT"))
+    base = f"http://127.0.0.1:{vault_http_port}"
 
-    # 1) init (idempotent)
-    init_status = _http_get_json(f"{base}/v1/sys/init")
-    initialized = bool(init_status.get("initialized", False))
+    _wait_http_ready(base)
 
-    init_doc: Optional[Dict[str, Any]] = fs.read_json(str(init_file)) if fs.exists(str(init_file)) else None
-
-    if not initialized:
-        # минимализм TERM-1: 1 ключ unseal
-        resp = _http_put_json(
+    if fs.exists(init_json):
+        init_data = fs.read_json(init_json)
+    else:
+        init_data = _http_put_json(
             f"{base}/v1/sys/init",
             {"secret_shares": 1, "secret_threshold": 1},
-            timeout_ms=4000,
+            timeout_s=10.0,
+            ok=(200,),
         )
-        fs.write_json_atomic(str(init_file), resp)
-        init_doc = resp
+        fs.write_json_atomic(init_json, init_data)
 
-    if not init_doc:
-        # если Vault уже initialized, но файла нет — это несходимость TERM-1 (нужно восстановить вручную)
-        raise RuntimeError("vault_init_file_missing")
-
-    root_token = str(init_doc.get("root_token") or "")
-    keys = init_doc.get("keys") or init_doc.get("keys_base64") or []
-    if not root_token or not keys:
-        raise RuntimeError("vault_init_artifacts_invalid")
-
-    markers.set("vault_init.done")
-
-    # 2) unseal (idempotent)
-    seal = _http_get_json(f"{base}/v1/sys/seal-status")
-    if bool(seal.get("sealed", True)):
-        key = str(keys[0])
-        _http_post_json(f"{base}/v1/sys/unseal", {"key": key}, timeout_ms=3000)
-
-    # 3) PKI root (idempotent)
-    pki_path = str(cfg.get("VAULT_PKI_ROOT_PATH", "pki-root"))
-    role_name = str(cfg.get("VAULT_PKI_ROLE", "terminal-leaf"))
-    domain_root = str(cfg.get("DOMAIN_ROOT", "terminal.local"))
-    ca_cn = str(cfg.get("TLS_CA_CN", f"terminal-ca.{domain_root}"))
+    root_token = str(init_data.get("root_token", "")).strip()
+    unseal_key = str((init_data.get("keys") or [""])[0]).strip()
+    if not root_token or not unseal_key:
+        raise RuntimeError("vault_init_data_incomplete")
 
     hdr = _vault_headers(root_token)
 
-    # enable pki (ignore if already enabled)
+    health = _http_get(f"{base}/v1/sys/health", timeout_s=2.0)
+    if health.status_code in (472, 503):
+        _http_put_json(f"{base}/v1/sys/unseal", {"key": unseal_key}, timeout_s=10.0, ok=(200,))
+        health2 = _http_get(f"{base}/v1/sys/health", timeout_s=2.0)
+        if health2.status_code == 503 and '"sealed":true' in (health2.text or "").replace(" ", "").lower():
+            raise RuntimeError("vault_unseal_failed")
+
     try:
-        _http_post_json(f"{base}/v1/sys/mounts/{pki_path}", {"type": "pki"}, headers=hdr, timeout_ms=4000)
+        _http_post_json(f"{base}/v1/sys/mounts/pki", {"type": "pki"}, headers=hdr, timeout_s=10.0, ok=(200, 204))
     except Exception:
         pass
 
-    # tune ttl (ignore errors)
     try:
         _http_post_json(
-            f"{base}/v1/sys/mounts/{pki_path}/tune",
-            {"max_lease_ttl": "8760h"},
+            f"{base}/v1/sys/mounts/pki/tune",
+            {"max_lease_ttl": "87600h"},
             headers=hdr,
-            timeout_ms=4000,
+            timeout_s=10.0,
+            ok=(200, 204),
         )
     except Exception:
         pass
 
-    # generate root CA only if cert file missing
     ca_file = certs_dir / "ca.crt"
-    if not fs.exists(str(ca_file)):
-        resp = _http_post_json(
-            f"{base}/v1/{pki_path}/root/generate/internal",
-            {"common_name": ca_cn, "ttl": "8760h"},
-            headers=hdr,
-            timeout_ms=6000,
-        )
-        cert = str(resp.get("data", {}).get("certificate") or "")
-        if not cert:
-            raise RuntimeError("vault_pki_root_generate_failed")
-        fs.write_text_atomic(str(ca_file), cert + "\n")
+    if not fs.exists(ca_file):
+        try:
+            _http_post_json(
+                f"{base}/v1/pki/root/generate/internal",
+                {"common_name": "terminal-ca", "ttl": "87600h"},
+                headers=hdr,
+                timeout_s=15.0,
+                ok=(200,),
+            )
+        except Exception:
+            pass
 
-    # role (upsert)
+    ca_pem = _read_ca_pem(base)
+    fs.write_text_atomic(ca_file, ca_pem)
+
+    domain_root = str(cfg.get("GLOBAL_DOMAIN_ROOT"))
     _http_post_json(
-        f"{base}/v1/{pki_path}/roles/{role_name}",
+        f"{base}/v1/pki/roles/terminal",
         {
+            "allowed_domains": domain_root,
+            "allow_subdomains": True,
+            "allow_localhost": True,
+            "allow_bare_domains": True,
             "allow_any_name": True,
+            "enforce_hostnames": False,
             "max_ttl": "24h",
         },
         headers=hdr,
-        timeout_ms=4000,
+        timeout_s=10.0,
+        ok=(200, 204),
     )
 
-    # issue initial certs
-    def issue_leaf(name: str) -> None:
-        cert_file = certs_dir / f"{name}.crt"
-        key_file = certs_dir / f"{name}.key"
-        if fs.exists(str(cert_file)) and fs.exists(str(key_file)):
-            return
-
-        resp = _http_post_json(
-            f"{base}/v1/{pki_path}/issue/{role_name}",
-            {
-                "common_name": name,
-                "ttl": "24h",
-            },
+    def _issue_leaf(name: str) -> None:
+        alt_names = f"{name},{name}.{domain_root}"
+        issued = _http_post_json(
+            f"{base}/v1/pki/issue/terminal",
+            {"common_name": name, "alt_names": alt_names, "ttl": "24h"},
             headers=hdr,
-            timeout_ms=6000,
+            timeout_s=15.0,
+            ok=(200,),
         )
-        data = resp.get("data", {})
-        cert = str(data.get("certificate") or "")
-        key = str(data.get("private_key") or "")
+        data = issued.get("data") or {}
+        cert = str(data.get("certificate", "")).strip()
+        key = str(data.get("private_key", "")).strip()
         if not cert or not key:
-            raise RuntimeError(f"vault_pki_issue_failed:{name}")
+            raise RuntimeError(f"vault_issue_incomplete:{name}")
 
-        fs.write_text_atomic(str(cert_file), cert + "\n")
-        fs.write_text_atomic(str(key_file), key + "\n")
+        crt = certs_dir / f"{name}.crt"
+        k = certs_dir / f"{name}.key"
+        pem = certs_dir / f"{name}.pem"
 
-    issue_leaf("vault")
-    issue_leaf("consul")
+        fs.write_text_atomic(crt, cert + "\n")
+        fs.write_text_atomic(k, key + "\n")
+        _write_pem_bundle(fs, cert_path=crt, key_path=k, out_path=pem)
 
-    markers.set("vault_initial_pem.done")
+    for leaf in ("vault", "consul", "traefik"):
+        _issue_leaf(leaf)
 
-    if log is not None:
-        try:
-            log.event("vault.bootstrap.ok", fields={"pki_path": pki_path, "certs_dir": str(certs_dir)})
-        except Exception:
-            pass
+    required = [
+        certs_dir / "ca.crt",
+        certs_dir / "vault.pem",
+        certs_dir / "consul.pem",
+        certs_dir / "traefik.pem",
+    ]
+    for p in required:
+        if not fs.exists(p) or not fs.read_text(p).strip():
+            raise RuntimeError(f"missing_required_artifact:{p.name}")
