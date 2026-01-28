@@ -14,6 +14,7 @@ class Markers(BaseMarkers):
     Контракт TERM-1:
     - marker = файл <name> в markers_dir (без суффиксов)
     - операции идемпотентны
+    - допускается legacy имя '<name>.done' на входе методов (нормализация)
     """
 
     def __init__(self, *, fs: IFS, markers_dir: Path) -> None:
@@ -29,6 +30,7 @@ class Markers(BaseMarkers):
                 EventCodeEnum.FS_ENSURE_LAYOUT,
                 fields={
                     "markers_dir": str(markers_dir),
+                    "markers_suffix": "",
                 },
             )
         return m

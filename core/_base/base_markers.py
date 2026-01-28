@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 from pathlib import Path
 from typing import Iterable
 
@@ -9,28 +10,28 @@ class BaseMarkers(IMarkers):
     """
     Базовый фасад маркеров.
 
-    Контракт TERM-1 (канонический):
-    - маркер = файл `<name>` в markers_dir (БЕЗ суффиксов)
+    TERM-1 контракт:
+    - маркер = файл `<name>` в markers_dir (без суффиксов)
     - операции идемпотентны
-    - имя маркера должно быть переносимым на файловую систему
+    - допускается входное имя `<name>.done` как legacy (нормализация имени)
     """
+
+    LEGACY_SUFFIX = ".done"
 
     def __init__(self, fs: IFS, markers_dir: Path) -> None:
         self._fs = fs
         self._dir = Path(markers_dir)
         self._fs.ensure_dir(self._dir)
 
-    @staticmethod
-    def _norm(name: str) -> str:
-        # legacy cleanup: allow passing "<name>.done" from old code/config
-        n = (name or "").strip()
-        while n.endswith(".done"):
-            n = n[: -len(".done")]
-        return n.replace("/", "_").strip()
+    @classmethod
+    def _norm(cls, name: str) -> str:
+        safe = (name or "").strip().replace("/", "_")
+        if safe.endswith(cls.LEGACY_SUFFIX):
+            safe = safe[: -len(cls.LEGACY_SUFFIX)]
+        return safe
 
     def _path(self, name: str) -> Path:
-        safe = self._norm(name)
-        return self._dir / safe
+        return self._dir / self._norm(name)
 
     def has(self, name: str) -> bool:
         return self._fs.exists(self._path(name))
@@ -53,7 +54,7 @@ class BaseMarkers(IMarkers):
         if not Path(self._dir).exists():
             return ()
         out: list[str] = []
-        for p in sorted(Path(self._dir).iterdir()):
+        for p in sorted(Path(self._dir).glob("*")):
             if not p.is_file():
                 continue
             name = p.name

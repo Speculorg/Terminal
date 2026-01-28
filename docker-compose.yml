@@ -1,4 +1,3 @@
-
 networks:
   net_private:
     driver: bridge
@@ -6,7 +5,7 @@ networks:
 
   net_public:
     driver: bridge
- 
+
 volumes:
   consul_data:
     driver: local
@@ -14,21 +13,21 @@ volumes:
       type: none
       o: bind
       device: ./volumes/consul_data
-  
+
   vault_data:
     driver: local
     driver_opts:
       type: none
       o: bind
       device: ./volumes/vault_data
-  
+
   fs:
     driver: local
     driver_opts:
       type: none
       o: bind
       device: ./volumes/fs
-  
+
   db_data:
     driver: local
     driver_opts:
@@ -50,7 +49,16 @@ services:
       PYTHONUNBUFFERED: "1"
       SERVICE_NAME: "consul"
       SERVICE_PORT: 8501
-      SERVICE_TAGS: "infra,kv,core,traefik.enable=true,traefik.http.routers.consul-ui.rule=Host(`consul.terminal.speculorg.localhost`),traefik.http.routers.consul-ui.entrypoints=websecure,traefik.http.routers.consul-ui.tls=true,traefik.http.services.consul-ui.loadbalancer.server.port=8501"
+      # Consul Catalog: publish only explicitly enabled services
+      SERVICE_TAGS: >-
+        infra,kv,core,
+        traefik.enable=true,
+        traefik.http.routers.consul.rule=Host(`consul.terminal.local`),
+        traefik.http.routers.consul.entrypoints=websecure,
+        traefik.http.routers.consul.tls=true,
+        traefik.http.services.consul.loadbalancer.server.scheme=https,
+        traefik.http.services.consul.loadbalancer.server.port=8501,
+        traefik.http.services.consul.loadbalancer.serverstransport=mtls-upstream@file
       CONSUL_HTTP_TOKEN_FILE: "/fs/terminal/secrets/consul_token_for_consul"
     volumes:
       - ./configs.env:/configs.env:ro
@@ -58,7 +66,6 @@ services:
       - ./services:/services:ro
       - ./services/consul/config:/config:rw
       - ./services/consul/app:/app:ro
-      # данные и слой fs/*
       - consul_data:/consul/data
       - fs:/fs/terminal
     networks:
@@ -75,7 +82,7 @@ services:
       context: ./services/vault
       dockerfile: Dockerfile
     cap_add:
-      - IPC_LOCK 
+      - IPC_LOCK
     env_file:
       - ./configs.env
     environment:
@@ -83,7 +90,15 @@ services:
       PYTHONUNBUFFERED: "1"
       SERVICE_NAME: "vault"
       SERVICE_PORT: 8200
-      SERVICE_TAGS: "infra,ca,core,traefik.enable=true,traefik.http.routers.vault-ui.rule=Host(`vault.terminal.speculorg.localhost`),traefik.http.routers.vault-ui.entrypoints=websecure,traefik.http.routers.vault-ui.tls=true,traefik.http.services.vault-ui.loadbalancer.server.port=8200"
+      SERVICE_TAGS: >-
+        infra,ca,core,
+        traefik.enable=true,
+        traefik.http.routers.vault.rule=Host(`vault.terminal.local`),
+        traefik.http.routers.vault.entrypoints=websecure,
+        traefik.http.routers.vault.tls=true,
+        traefik.http.services.vault.loadbalancer.server.scheme=https,
+        traefik.http.services.vault.loadbalancer.server.port=8200,
+        traefik.http.services.vault.loadbalancer.serverstransport=mtls-upstream@file
       CONSUL_HTTP_TOKEN_FILE: "/fs/terminal/secrets/consul_token_for_vault"
     volumes:
       - ./configs.env:/configs.env:ro
@@ -112,7 +127,13 @@ services:
       PYTHONUNBUFFERED: "1"
       SERVICE_NAME: "traefik"
       SERVICE_PORT: 8443
-      SERVICE_TAGS: "infra,edge,core,traefik.enable=true,traefik.http.routers.traefik.rule=Host(`traefik.terminal.speculorg.localhost`),traefik.http.routers.traefik.entrypoints=websecure,traefik.http.routers.traefik.service=api@internal,traefik.http.routers.traefik.tls=true"
+      SERVICE_TAGS: >-
+        infra,edge,core,
+        traefik.enable=true,
+        traefik.http.routers.traefik.rule=Host(`traefik.terminal.local`),
+        traefik.http.routers.traefik.entrypoints=websecure,
+        traefik.http.routers.traefik.service=api@internal,
+        traefik.http.routers.traefik.tls=true
       CONSUL_HTTP_TOKEN_FILE: "/fs/terminal/secrets/consul_token_for_traefik"
     volumes:
       - ./configs.env:/configs.env:ro

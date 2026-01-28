@@ -1,9 +1,20 @@
-# Dynamic configuration (secure mode)
+# Dynamic configuration (secure mode, shared for all services)
 #
-# Only shared TLS/mTLS options and upstream transports live here.
-# Routers/services are discovered via Consul Catalog provider.
+# Responsibilities:
+# - inbound TLS store + mTLS client auth options (mtls)
+# - upstream mTLS transport for backends discovered via Consul Catalog
+#
+# Traefik routing is configured via Consul service tags:
+# - exposedByDefault=false (in static config)
+# - each service must set traefik.enable=true + router/service tags
 
 tls:
+  stores:
+    default:
+      defaultCertificate:
+        certFile: /fs/terminal/certs/traefik.crt
+        keyFile: /fs/terminal/certs/traefik.key
+
   options:
     mtls:
       clientAuth:
@@ -11,10 +22,10 @@ tls:
           - /fs/terminal/certs/ca.crt
         clientAuthType: RequireAndVerifyClientCert
 
-serversTransports:
-  default:
-    rootCAs:
-      - /fs/terminal/certs/ca.crt
-    certificates:
-      - certFile: /fs/terminal/certs/traefik.crt
-        keyFile: /fs/terminal/certs/traefik.key
+http:
+  serversTransports:
+    mtls-upstream:
+      rootcas:
+        - /fs/terminal/certs/ca.crt
+      certificates:
+        - /fs/terminal/certs/traefik.pem

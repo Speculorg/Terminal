@@ -91,7 +91,13 @@ class DaemonPolicy(BasePolicy):
 
             # если живой процесс, но режим должен измениться -> restart
             if self._current_mode != mode:
-                self._runner.restart(spec=DaemonSpec(cmd=self._cmd[mode.value]), stop_timeout_ms=5000)
+                # TERM-1 minimalism: if commands are identical, no restart required.
+                cur_cmd = self._cmd.get(self._current_mode.value, [])
+                next_cmd = self._cmd.get(mode.value, [])
+                if list(cur_cmd) == list(next_cmd):
+                    self._current_mode = mode
+                    return self.ok(details={"daemon_alive": True, "mode": mode.value, "note": "cmd_identical_no_restart"})
+                self._runner.restart(spec=DaemonSpec(cmd=next_cmd), stop_timeout_ms=5000)
                 self._current_mode = mode
                 return self.ok(details={"daemon_restarted": True, "mode": mode.value})
 

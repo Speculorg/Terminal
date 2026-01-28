@@ -1,98 +1,137 @@
 from __future__ import annotations
 
-import json
+import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional, Sequence, Tuple
+from typing import Any, Optional, Sequence, Tuple
 
 import requests
 
-from core._base import BaseRegistrar
-from core._interfaces import IConfigs
-
-
-def _token_from_cfg(cfg: IConfigs) -> Optional[str]:
-    # 1) cfg.model.context.consul_token (preferred)
-    try:
-        model = getattr(cfg, "model", None)
-        if model and getattr(model, "context", None) and getattr(model.context, "consul_token", None):
-            return str(model.context.consul_token)
-    except Exception:
-        pass
-
-    # 2) fallback to env key
-    try:
-        v = cfg.get("CONSUL_HTTP_TOKEN", None)
-        return str(v) if v else None
-    except Exception:
-        return None
+from core._interfaces import IConfigs, ITLS
+from core.tls.paths import TlsPaths
 
 
 @dataclass(frozen=True, slots=True)
-class ConsulConn:
+class ConsulEndpoint:
     scheme: str
     host: str
     port: int
-    token: Optional[str]
-    tls_verify: Optional[str] = None  # ca file path
-    tls_cert: Optional[Tuple[str, str]] = None  # (cert_file, key_file)
+    token: str
+    token_file: Optional[str] = None
+    # TLS (for https)
+    ca_file: Optional[str] = None
+    client_cert: Optional[Tuple[str, str]] = None
+    # registrar behavior
+    deregister_critical_after_sec: int = 45
 
-    def base_url(self) -> str:
-        return f"{self.scheme}://{self.host}:{self.port}"
 
-
-class ConsulRegistrar(BaseRegistrar):
+class ConsulRegistrar:
     """
-    Consul registrar via Agent HTTP API.
+    Consul Registrar (TERM-1).
 
-    TERM-1:
-    - после bootstrap ожидается HTTPS + mTLS
-    - все ошибки requests нормализуются в RuntimeError для RETRY в политиках
+    Использует:
+    - /v1/agent/service/register (agent API)
+    - /v1/agent/check/pass (TTL heartbeat)
+
+    Принцип для TERM-1 автосходимости:
+    - Токен может быть недоступен на старте контейнера (создаётся bootstrap'ом Consul).
+      В этом случае adapter НЕ падает при сборке deps, а отдаёт retryable RuntimeError
+      во время операций register/heartbeat/deregister.
+    - После bootstrap работает по HTTPS+mTLS (CA + leaf сертификат текущего сервиса).
     """
 
-    def __init__(self, *, conn: ConsulConn, timeout_ms: int = 3000) -> None:
-        self._conn = conn
-        self._timeout_s = max(0.001, int(timeout_ms)) / 1000.0
+    def __init__(self, *, ep: ConsulEndpoint) -> None:
+        self._ep = ep
 
     @classmethod
-    def from_configs(cls, *, cfg: IConfigs) -> "ConsulRegistrar":
-        # По умолчанию: HTTPS (TERM-1 secure). HTTP допустим только если явно задан CONSUL_SCHEME=http.
+    def from_configs(cls, *, cfg: IConfigs, tls: ITLS | None = None) -> "ConsulRegistrar":
+        # endpoint base
         scheme = str(cfg.get("CONSUL_SCHEME", "https")).strip() or "https"
-        host = str(cfg.get("CONSUL_HOST", "consul"))
-        if scheme == "https":
-            port = int(cfg.get("CONSUL_HTTPS_PORT", 8501) or 8501)
-        else:
-            port = int(cfg.get("CONSUL_HTTP_PORT", 8500) or 8500)
+        host = str(cfg.get("CONSUL_HOST", "consul")).strip() or "consul"
+        port = int(cfg.get("CONSUL_HTTPS_PORT" if scheme == "https" else "CONSUL_HTTP_PORT", 8501 if scheme == "https" else 8500))
 
-        token = _token_from_cfg(cfg)
-        timeout_ms = int(cfg.get("CONSUL_REQUEST_TIMEOUT_MS", 3000) or 3000)
+        # token: может появиться позже (bootstrap), поэтому НЕ требуем его здесь.
+        token = ""
+        token_file = None
 
-        tls_verify: Optional[str] = None
-        tls_cert: Optional[Tuple[str, str]] = None
+        # 1) из context (если уже заполнен где-то выше)
+        try:
+            model = getattr(cfg, "_model", None)
+            ctx = getattr(model, "context", None)
+            token = str(getattr(ctx, "consul_token", "") or "").strip()
+        except Exception:
+            token = ""
 
+        # 2) из env *_TOKEN_FILE (наиболее надёжно в TERM-1)
+        for key in ("CONSUL_HTTP_TOKEN_FILE", "CONTEXT_CONSUL_HTTP_TOKEN_FILE"):
+            try:
+                p = str(cfg.get(key, "") or "").strip()
+                if p:
+                    token_file = p
+                    break
+            except Exception:
+                continue
+
+        # registrar tuning
+        dereg_after = int(cfg.get("REGISTRAR_DEREGISTER_CRITICAL_SERVICE_AFTER_SEC", 45) or 45)
+
+        # TLS
+        ca_file = None
+        client_cert = None
         if scheme == "https":
             certs_dir = Path(str(cfg.get("FS_CERTS_DIR", "/fs/terminal/certs")))
-            ca_file = certs_dir / "ca.crt"
+            svc_name = str(getattr(cfg, "service_name", "unknown"))
+            p = TlsPaths(certs_dir=certs_dir)
+            ca_file = str(p.ca())
+            client_cert = (str(p.cert(svc_name)), str(p.key(svc_name)))
 
-            # сервис регистрирует себя -> используем leaf cert сервиса
-            svc_name = getattr(cfg, "service_name", None) or str(cfg.get("SERVICE_NAME", "unknown"))
-            cert_file = certs_dir / f"{svc_name}.crt"
-            key_file = certs_dir / f"{svc_name}.key"
-
-            tls_verify = str(ca_file)
-            tls_cert = (str(cert_file), str(key_file))
-
-        conn = ConsulConn(
-            scheme=scheme,
-            host=host,
-            port=port,
-            token=token,
-            tls_verify=tls_verify,
-            tls_cert=tls_cert,
+        return cls(
+            ep=ConsulEndpoint(
+                scheme=scheme,
+                host=host,
+                port=int(port),
+                token=token,
+                token_file=token_file,
+                ca_file=ca_file,
+                client_cert=client_cert,
+                deregister_critical_after_sec=int(dereg_after),
+            )
         )
-        return cls(conn=conn, timeout_ms=timeout_ms)
 
-    # --- IRegistrar ---
+    def _base(self) -> str:
+        return f"{self._ep.scheme}://{self._ep.host}:{self._ep.port}"
+
+    def _load_token_from_file(self) -> str:
+        p = self._ep.token_file
+        if not p:
+            return ""
+        try:
+            fp = Path(p)
+            if not fp.exists():
+                return ""
+            v = fp.read_text(encoding="utf-8").strip()
+            return v
+        except Exception:
+            return ""
+
+    def _token(self) -> str:
+        # in-memory wins, then file
+        if self._ep.token:
+            return self._ep.token
+        return self._load_token_from_file()
+
+    def _headers(self) -> dict[str, str]:
+        token = self._token()
+        if not token:
+            # для политики RegistrarPolicy это будет RETRY, а не crash сервиса
+            raise RuntimeError("consul_registrar_token_not_ready")
+        return {"X-Consul-Token": token}
+
+    def _verify(self) -> Any:
+        return self._ep.ca_file or True
+
+    def _cert(self) -> Any:
+        return self._ep.client_cert
 
     def register(
         self,
@@ -104,89 +143,55 @@ class ConsulRegistrar(BaseRegistrar):
         check_id: str | None = None,
         ttl_seconds: int | None = None,
     ) -> None:
-        """
-        PUT /v1/agent/service/register
+        if not ttl_seconds:
+            # TERM-1 всегда TTL, но не запрещаем вызывать без TTL
+            ttl_seconds = 15
 
-        TTL check:
-        - если ttl_seconds задан, создаём check вида {"TTL":"15s"}.
-        - check_id обязателен для heartbeat; если не задан — генерируем детерминированный.
-        """
-        sid = self._service_id(service, check_id)
-        payload: dict[str, object] = {
-            "ID": sid,
+        dereg_after = int(self._ep.deregister_critical_after_sec)
+        payload = {
+            "ID": service,
             "Name": service,
             "Address": address,
             "Port": int(port),
-            "Tags": list(tags or ()),
+            "Tags": list(tags),
+            "Check": {
+                "CheckID": check_id or f"service:{service}:ttl",
+                "Name": f"{service} ttl",
+                "TTL": f"{int(ttl_seconds)}s",
+                "DeregisterCriticalServiceAfter": f"{dereg_after}s",
+            },
         }
 
-        if ttl_seconds is not None:
-            cid = check_id or self._default_check_id(service)
-            payload["Check"] = {
-                "CheckID": cid,
-                "Name": f"{service}:ttl",
-                "TTL": f"{int(ttl_seconds)}s",
-                "DeregisterCriticalServiceAfter": "0s",
-            }
-
-        self._put_json("/v1/agent/service/register", payload)
+        r = requests.put(
+            f"{self._base()}/v1/agent/service/register",
+            headers=self._headers(),
+            json=payload,
+            timeout=5.0,
+            verify=self._verify(),
+            cert=self._cert(),
+        )
+        if r.status_code != 200:
+            raise RuntimeError(f"consul_register_failed:{r.status_code}:{(r.text or '')[:256]}")
 
     def heartbeat(self, *, check_id: str) -> None:
-        """
-        PUT /v1/agent/check/pass/<check_id>
-        """
-        cid = str(check_id)
-        self._put(f"/v1/agent/check/pass/{cid}")
+        r = requests.put(
+            f"{self._base()}/v1/agent/check/pass/{check_id}",
+            headers=self._headers(),
+            timeout=5.0,
+            verify=self._verify(),
+            cert=self._cert(),
+        )
+        if r.status_code != 200:
+            raise RuntimeError(f"consul_check_pass_failed:{r.status_code}:{(r.text or '')[:256]}")
 
     def deregister(self, *, service: str, check_id: str | None = None) -> None:
-        """
-        PUT /v1/agent/service/deregister/<service_id>
-        """
-        sid = self._service_id(service, check_id)
-        self._put(f"/v1/agent/service/deregister/{sid}")
-
-    # --- internals ---
-
-    def _headers(self) -> dict[str, str]:
-        h = {"Content-Type": "application/json"}
-        if self._conn.token:
-            h["X-Consul-Token"] = self._conn.token
-        return h
-
-    def _url(self, path: str) -> str:
-        return self._conn.base_url() + path
-
-    def _req_kwargs(self) -> dict:
-        kw = {"timeout": self._timeout_s}
-        if self._conn.tls_verify:
-            kw["verify"] = self._conn.tls_verify
-        if self._conn.tls_cert:
-            kw["cert"] = self._conn.tls_cert
-        return kw
-
-    def _put(self, path: str) -> None:
-        try:
-            r = requests.put(self._url(path), headers=self._headers(), **self._req_kwargs())
-            if r.status_code >= 300:
-                raise RuntimeError(f"consul_http_error:{r.status_code}:{(r.text or '')[:256]}")
-        except requests.RequestException as e:
-            raise RuntimeError(f"consul_request_error:{type(e).__name__}") from e
-
-    def _put_json(self, path: str, payload: dict[str, object]) -> None:
-        try:
-            data = json.dumps(payload, ensure_ascii=False)
-            r = requests.put(self._url(path), data=data, headers=self._headers(), **self._req_kwargs())
-            if r.status_code >= 300:
-                raise RuntimeError(f"consul_http_error:{r.status_code}:{(r.text or '')[:256]}")
-        except requests.RequestException as e:
-            raise RuntimeError(f"consul_request_error:{type(e).__name__}") from e
-
-    @staticmethod
-    def _default_check_id(service: str) -> str:
-        return f"service:{service}:ttl"
-
-    @staticmethod
-    def _service_id(service: str, check_id: str | None) -> str:
-        if check_id:
-            return f"{service}:{check_id}"
-        return service
+        # сначала дерегистрируем сервис
+        r = requests.put(
+            f"{self._base()}/v1/agent/service/deregister/{service}",
+            headers=self._headers(),
+            timeout=5.0,
+            verify=self._verify(),
+            cert=self._cert(),
+        )
+        if r.status_code != 200:
+            raise RuntimeError(f"consul_deregister_failed:{r.status_code}:{(r.text or '')[:256]}")

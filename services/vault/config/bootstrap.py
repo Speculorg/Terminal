@@ -45,12 +45,14 @@ def _http_post_json(
     return r.json() if r.text else {}
 
 
-def _wait_http_ready(base: str, *, timeout_s: float = 60.0) -> None:
+def _wait_http_ready(base: str, *, timeout_s: float = 60.0, log: ILogger | None = None) -> None:
     t0 = time.time()
     while True:
         try:
             r = _http_get(f"{base}/v1/sys/health", timeout_s=2.0)
             if r.status_code in (200, 429, 472, 473, 501, 503) and (r.text or ""):
+                if log is not None:
+                    log.info("vault_bootstrap:http_ready", fields={"status": r.status_code})
                 return
         except Exception:
             pass
@@ -80,134 +82,151 @@ def vault_bootstrap(*, cfg: IConfigs, fs: IFS, markers: IMarkers, log: Optional[
     """
     TERM-1 bootstrap для Vault (идемпотентно):
 
-    - init (1/1) и сохранение (root token + unseal key) в FS_SECRETS_DIR/vault_init.json
-    - unseal (если sealed)
-    - PKI root (CA) + role
-    - выпуск initial leaf certs (TTL 24h): vault, consul, traefik
-      + запись: ca.crt, <name>.crt, <name>.key, <name>.pem в FS_CERTS_DIR
+    1) init + unseal (root token + unseal keys сохраняются на диск)
+    2) PKI: enable pki, tune, generate root CA, role issue, leaf сертификаты:
+       - vault, consul, traefik (PEM-bundle для upstream mTLS)
+    3) Экспорт CA PEM в /fs/terminal/certs/ca.crt + bundles *.pem
 
-    Важно:
-    - Маркеры НЕ выставляются здесь (это делает BootstrapPolicy ядра).
-    - Функция обязана падать с исключением, если после выполнения нет обязательных артефактов.
+    Маркеры здесь НЕ выставляются (это делает BootstrapPolicy ядра).
     """
-    if log:
-        log.info("vault_bootstrap:start")
+    _ = markers  # маркеры управляются ядром
 
-    _ = markers, log  # не используем напрямую в bootstrap_fn
+    def _log(msg: str, **fields) -> None:
+        if log is None:
+            return
+        log.info(msg, fields=fields or None)
 
-    secrets_dir = Path(cfg.get("FS_SECRETS_DIR"))
-    certs_dir = Path(cfg.get("FS_CERTS_DIR"))
+    secrets_dir = Path(str(cfg.get("FS_SECRETS_DIR", "/fs/terminal/secrets")))
+    certs_dir = Path(str(cfg.get("FS_CERTS_DIR", "/fs/terminal/certs")))
     fs.ensure_dir(secrets_dir)
     fs.ensure_dir(certs_dir)
 
-    init_json = secrets_dir / "vault_init.json"
+    root_token_file = secrets_dir / "root_vault_token.txt"
+    unseal_keys_file = secrets_dir / "vault_unseal_keys.json"
 
-    vault_http_port = int(cfg.get("VAULT_HTTP_PORT"))
+    vault_http_port = int(cfg.get("VAULT_HTTP_PORT", 8200) or 8200)
     base = f"http://127.0.0.1:{vault_http_port}"
+    _log("vault_bootstrap:start", base=base, secrets_dir=str(secrets_dir), certs_dir=str(certs_dir))
 
-    if log:
-        log.info("vault_bootstrap:wait_ready", fields={"base": base})
-    _wait_http_ready(base)
+    _log("vault_bootstrap:wait_http_ready", url=f"{base}/v1/sys/health")
+    _wait_http_ready(base, log=log)
 
-    if fs.exists(init_json):
-        init_data = fs.read_json(init_json)
-    else:
-        init_data = _http_put_json(
+    # --- init (idempotent) ---
+    root_token = fs.read_text(root_token_file).strip() if fs.exists(root_token_file) else ""
+    unseal_keys: list[str] = []
+    if fs.exists(unseal_keys_file):
+        data = fs.read_json(unseal_keys_file)
+        unseal_keys = list(data.get("keys", []) or [])
+
+    if not root_token or not unseal_keys:
+        _log("vault_bootstrap:init:request")
+        init = _http_put_json(
             f"{base}/v1/sys/init",
-            {"secret_shares": 1, "secret_threshold": 1},
+            {
+                "secret_shares": 1,
+                "secret_threshold": 1,
+            },
             timeout_s=10.0,
             ok=(200,),
         )
-        fs.write_json_atomic(init_json, init_data)
+        root_token = str(init.get("root_token", "")).strip()
+        keys = init.get("keys", []) or []
+        unseal_keys = [str(k).strip() for k in keys if str(k).strip()]
+        if not root_token or not unseal_keys:
+            raise RuntimeError("vault_init_missing_artifacts")
 
-    root_token = str(init_data.get("root_token", "")).strip()
-    unseal_key = str((init_data.get("keys") or [""])[0]).strip()
-    if not root_token or not unseal_key:
-        raise RuntimeError("vault_init_data_incomplete")
+        fs.write_text_atomic(root_token_file, root_token + "\n")
+        fs.write_json_atomic(unseal_keys_file, {"keys": unseal_keys})
+        _log("vault_bootstrap:init:ok", root_token_file=str(root_token_file), unseal_keys_file=str(unseal_keys_file))
 
+    # --- unseal (idempotent) ---
     hdr = _vault_headers(root_token)
-
     health = _http_get(f"{base}/v1/sys/health", timeout_s=2.0)
-    if health.status_code in (472, 503):
-        _http_put_json(f"{base}/v1/sys/unseal", {"key": unseal_key}, timeout_s=10.0, ok=(200,))
-        health2 = _http_get(f"{base}/v1/sys/health", timeout_s=2.0)
-        if health2.status_code == 503 and '"sealed":true' in (health2.text or "").replace(" ", "").lower():
-            raise RuntimeError("vault_unseal_failed")
-
+    sealed = False
     try:
-        _http_post_json(f"{base}/v1/sys/mounts/pki", {"type": "pki"}, headers=hdr, timeout_s=10.0, ok=(200, 204))
+        sealed = bool(health.json().get("sealed", False))
     except Exception:
-        pass
+        sealed = False
 
-    try:
-        _http_post_json(
-            f"{base}/v1/sys/mounts/pki/tune",
-            {"max_lease_ttl": "87600h"},
+    if sealed:
+        _log("vault_bootstrap:unseal:start")
+        for k in unseal_keys[:1]:
+            _http_put_json(f"{base}/v1/sys/unseal", {"key": k}, timeout_s=10.0, ok=(200,))
+        _log("vault_bootstrap:unseal:ok")
+
+    # --- PKI setup ---
+    # enable pki (idempotent)
+    st = _http_get(f"{base}/v1/sys/mounts/pki", headers=hdr, timeout_s=5.0).status_code
+    if st == 404:
+        _log("vault_bootstrap:pki:enable")
+        _http_post_json(f"{base}/v1/sys/mounts/pki", {"type": "pki"}, headers=hdr, timeout_s=10.0, ok=(204,))
+    else:
+        _log("vault_bootstrap:pki:mount_exists", status=st)
+
+    # tune
+    _log("vault_bootstrap:pki:tune")
+    _http_post_json(f"{base}/v1/sys/mounts/pki/tune", {"max_lease_ttl": "8760h"}, headers=hdr, timeout_s=10.0, ok=(204,))
+
+    # root CA (generate once)
+    ca_pem_path = certs_dir / "ca.crt"
+    if not fs.exists(ca_pem_path) or not fs.read_text(ca_pem_path).strip():
+        _log("vault_bootstrap:pki:generate_root")
+        _http_put_json(
+            f"{base}/v1/pki/root/generate/internal",
+            {"common_name": "terminal.local", "ttl": "8760h"},
             headers=hdr,
             timeout_s=10.0,
-            ok=(200, 204),
+            ok=(200,),
         )
-    except Exception:
-        pass
+        ca_pem = _read_ca_pem(base)
+        fs.write_text_atomic(ca_pem_path, ca_pem)
+        _log("vault_bootstrap:pki:root_ready", ca_file=str(ca_pem_path))
+    else:
+        _log("vault_bootstrap:pki:root_exists", ca_file=str(ca_pem_path))
 
-    ca_file = certs_dir / "ca.crt"
-    if not fs.exists(ca_file):
-        try:
-            _http_post_json(
-                f"{base}/v1/pki/root/generate/internal",
-                {"common_name": "terminal-ca", "ttl": "87600h"},
-                headers=hdr,
-                timeout_s=15.0,
-                ok=(200,),
-            )
-        except Exception:
-            pass
-
-    ca_pem = _read_ca_pem(base)
-    fs.write_text_atomic(ca_file, ca_pem)
-
-    domain_root = str(cfg.get("GLOBAL_DOMAIN_ROOT"))
+    # role (issue)
+    _log("vault_bootstrap:pki:role_upsert")
     _http_post_json(
-        f"{base}/v1/pki/roles/terminal",
+        f"{base}/v1/pki/roles/terminal-leaf",
         {
-            "allowed_domains": domain_root,
+            "allowed_domains": "terminal.local",
             "allow_subdomains": True,
-            "allow_localhost": True,
-            "allow_bare_domains": True,
-            "allow_any_name": True,
-            "enforce_hostnames": False,
             "max_ttl": "24h",
         },
         headers=hdr,
         timeout_s=10.0,
-        ok=(200, 204),
+        ok=(204,),
     )
 
-    def _issue_leaf(name: str) -> None:
-        alt_names = f"{name},{name}.{domain_root}"
-        issued = _http_post_json(
-            f"{base}/v1/pki/issue/terminal",
-            {"common_name": name, "alt_names": alt_names, "ttl": "24h"},
+    # issue leaves for required services
+    def _issue(name: str) -> tuple[str, str]:
+        d = _http_post_json(
+            f"{base}/v1/pki/issue/terminal-leaf",
+            {"common_name": f"{name}.terminal.local", "ttl": "24h"},
             headers=hdr,
-            timeout_s=15.0,
+            timeout_s=10.0,
             ok=(200,),
         )
-        data = issued.get("data") or {}
-        cert = str(data.get("certificate", "")).strip()
-        key = str(data.get("private_key", "")).strip()
-        if not cert or not key:
-            raise RuntimeError(f"vault_issue_incomplete:{name}")
+        cert = str(d.get("data", {}).get("certificate", "") or "")
+        key = str(d.get("data", {}).get("private_key", "") or "")
+        if not cert.strip() or not key.strip():
+            raise RuntimeError(f"vault_issue_empty_leaf:{name}")
+        return cert, key
 
-        crt = certs_dir / f"{name}.crt"
-        k = certs_dir / f"{name}.key"
-        pem = certs_dir / f"{name}.pem"
+    for svc in ("vault", "consul", "traefik"):
+        crt = certs_dir / f"{svc}.crt"
+        key = certs_dir / f"{svc}.key"
+        pem = certs_dir / f"{svc}.pem"
+        if fs.exists(crt) and fs.exists(key) and fs.read_text(crt).strip() and fs.read_text(key).strip():
+            _log("vault_bootstrap:pki:leaf_exists", svc=svc)
+        else:
+            _log("vault_bootstrap:pki:issue_leaf", svc=svc)
+            cert, priv = _issue(svc)
+            fs.write_text_atomic(crt, cert.strip() + "\n")
+            fs.write_text_atomic(key, priv.strip() + "\n")
 
-        fs.write_text_atomic(crt, cert + "\n")
-        fs.write_text_atomic(k, key + "\n")
-        _write_pem_bundle(fs, cert_path=crt, key_path=k, out_path=pem)
-
-    for leaf in ("vault", "consul", "traefik"):
-        _issue_leaf(leaf)
+        # bundle
+        _write_pem_bundle(fs, cert_path=crt, key_path=key, out_path=pem)
 
     required = [
         certs_dir / "ca.crt",
@@ -218,3 +237,5 @@ def vault_bootstrap(*, cfg: IConfigs, fs: IFS, markers: IMarkers, log: Optional[
     for p in required:
         if not fs.exists(p) or not fs.read_text(p).strip():
             raise RuntimeError(f"missing_required_artifact:{p.name}")
+
+    _log("vault_bootstrap:ok", artifacts=[str(p) for p in required])

@@ -62,8 +62,7 @@ class BaseService(IService):
         """
         from core.fsm import FSM
         from core.fsm.daemon import DaemonRunner
-        from core.fsm.policies import BootstrapPolicy, DaemonPolicy, TlsPolicy, RegistrarPolicy
-        from core.fsm.policies.registrar_policy import RegistrarSpec
+        from core.fsm.policies import BootstrapPolicy, DaemonPolicy, RegistrarPolicy, RegistrarSpec, TlsPolicy
 
         stage_gates_raw = getattr(self._run_profile, "stage_gates", {}) or {}
         start_cmd_raw = getattr(self._run_profile, "start_cmd", {}) or {}
@@ -93,25 +92,19 @@ class BaseService(IService):
 
         svc_name = str(getattr(deps.cfg, "service_name", "unknown"))
 
-        runner = DaemonRunner()
+        # TERM-1: Vault использует Consul storage и требует Consul token для старта.
+        # Для чистого запуска docker compose up: задерживаем BOOTSTRAPPING до появления маркера "consul_tokens".
+        if svc_name == "vault":
+            prev = list(stage_gates.get(StateEnum.BOOTSTRAPPING, ()))
+            if "consul_tokens" not in prev:
+                stage_gates[StateEnum.BOOTSTRAPPING] = tuple(prev + ["consul_tokens"])
 
+
+        runner = DaemonRunner()
         daemon_policy = DaemonPolicy(
             runner=runner,
             markers=deps.markers,
             start_cmd={"http": http_cmd, "https": https_cmd},
-        )
-
-
-        registrar_policy = RegistrarPolicy(
-            cfg=deps.cfg,
-            registrar=deps.registrar,
-            spec=RegistrarSpec(
-                service=svc_name,
-                address=svc_name,
-                port=int(getattr(deps.cfg, "service_port", deps.cfg.get("SERVICE_PORT", 0)) or 0),
-                tags=tuple(getattr(deps.cfg, "service_tags", ())) or tuple(getattr(getattr(deps.cfg, "model", None), "context", None).tags if getattr(deps.cfg, "model", None) else ()),
-                ttl_seconds=int(deps.cfg.get("REGISTRAR_TTL_SEC", 15) or 15),
-            ),
         )
 
         bootstrap_fn = getattr(self._run_profile, "bootstrap_fn", None)
@@ -132,8 +125,7 @@ class BaseService(IService):
         policy_matrix: dict[StateEnum, Sequence[Any]] = {
             StateEnum.INITIALIZING: (daemon_policy,),
             StateEnum.BOOTSTRAPPING: tuple(boot_policies),
-            StateEnum.REGISTERING: (registrar_policy, daemon_policy),
-            StateEnum.RUNNING: (registrar_policy, daemon_policy),
+            StateEnum.RUNNING: (daemon_policy,),
             StateEnum.STOPPING: (daemon_policy,),
         }
 
@@ -153,6 +145,56 @@ class BaseService(IService):
             policy_matrix[StateEnum.SECURING] = (tls_policy, daemon_policy)
         else:
             policy_matrix[StateEnum.SECURING] = (daemon_policy,)
+
+        # --- Consul Registrar (TTL) ---
+        # включаем только если у сервиса есть token (CONSUL_HTTP_TOKEN_FILE -> context.consul_token)
+        ctx = None
+        try:
+            model = getattr(deps.cfg, "_model", None)
+            ctx = getattr(model, "context", None)
+        except Exception:
+            ctx = None
+
+        # TERM-1: RegistrarPolicy всегда включена (если registrar присутствует).
+        # Токен может появиться позже (Consul bootstrap), поэтому операции register/heartbeat должны быть retryable.
+        if getattr(deps, "registrar", None) is not None:
+            # address/port берём из соответствующего секшена; по умолчанию — имя сервиса
+            if svc_name == "consul":
+                address = str(deps.cfg.get("CONSUL_HOST", "consul"))
+                port = int(deps.cfg.get("CONSUL_HTTPS_PORT", 8501) or 8501)
+            elif svc_name == "vault":
+                address = str(deps.cfg.get("VAULT_HOST", "vault"))
+                port = int(deps.cfg.get("VAULT_HTTPS_PORT", 8200) or 8200)
+            elif svc_name == "traefik":
+                address = str(deps.cfg.get("TRAEFIK_HOST", "traefik"))
+                port = int(deps.cfg.get("TRAEFIK_HTTPS_PORT", 8443) or 8443)
+            else:
+                address = svc_name
+                port = int(deps.cfg.get("SERVICE_PORT", "0") or "0")
+
+            tags: tuple[str, ...] = ()
+            try:
+                tags = tuple(getattr(ctx, "tags", ()) or ())
+            except Exception:
+                tags = ()
+
+            ttl_sec = int(deps.cfg.get("REGISTRAR_TTL_SEC", 15) or 15)
+
+            registrar_policy = RegistrarPolicy(
+                cfg=deps.cfg,
+                registrar=deps.registrar,
+                spec=RegistrarSpec(
+                    service=svc_name,
+                    address=address,
+                    port=int(port),
+                    tags=tags,
+                    ttl_seconds=ttl_sec,
+                ),
+            )
+
+            policy_matrix[StateEnum.REGISTERING] = (registrar_policy, daemon_policy)
+            # RUNNING: heartbeat + process liveness
+            policy_matrix[StateEnum.RUNNING] = (registrar_policy, daemon_policy)
 
         return FSM(
             cfg=deps.cfg,

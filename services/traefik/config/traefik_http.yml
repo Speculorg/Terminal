@@ -1,7 +1,10 @@
-# Static configuration (bootstrap window; HTTP only)
+# Static configuration (bootstrap window / internal only)
 #
-# - Bound to localhost to avoid exposing the bootstrap window outside of the container network.
-# - Dashboard is enabled for debugging inside the container.
+# TERM-1:
+# - HTTP entrypoint bound to loopback inside container (not published to host).
+# - No Consul Catalog provider here (token+mTLS будут подключены в secure config).
+# - This mode exists only because DaemonPolicy expects http->https switch.
+
 log:
   level: INFO
 
@@ -9,7 +12,6 @@ accessLog: {}
 
 api:
   dashboard: true
-  insecure: true
 
 entryPoints:
   web:
