@@ -1,5 +1,8 @@
-# source\services\consul\config\consul_https.hcl
-
+# services/consul/config/consul_https.hcl
+#
+# Secure mode: HTTPS+mTLS.
+# - HTTP is disabled (TERM-1 rule: HTTP only in bootstrap window).
+# - grpc (plain) is disabled; keep grpc_tls for future needs.
 
 datacenter = "dc-1"
 node_name = "node-1"
@@ -11,16 +14,17 @@ disable_update_check = true
 ui_config { enabled = true }
 
 addresses {
-  http = "0.0.0.0"
   https = "0.0.0.0"
   dns = "0.0.0.0"
 }
 
 ports {
-  http = 8500
+  http = -1
   https = 8501
-  grpc = 8502
+
+  grpc = -1
   grpc_tls = 8503
+
   dns = 8600
 }
 
@@ -35,6 +39,7 @@ tls {
     ca_file = "/fs/terminal/certs/ca.crt"
     cert_file = "/fs/terminal/certs/consul.crt"
     key_file = "/fs/terminal/certs/consul.key"
+
     verify_incoming = true
     verify_outgoing = true
   }
@@ -46,8 +51,4 @@ tls {
   https {
     verify_incoming = true
   }
-}
-
-auto_encrypt {
-  allow_tls = true
 }
