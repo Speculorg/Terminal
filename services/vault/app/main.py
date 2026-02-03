@@ -16,9 +16,14 @@ class VaultRunProfile(IRunProfile):
 
     @property
     def stage_gates(self) -> Mapping[str, Sequence[str]]:
-        # Vault сам себе не зависит (bootstrap делает init/unseal/PKI и пишет PEM в FS).
-        # REGISTERING оставляем пустым на TERM-1.
+        # INITIALIZING: вычисление RunMode.
+        #   Если маркеры init уже есть -> NORMAL, иначе -> FIRST (HTTP bootstrap-окно).
+        # BOOTSTRAPPING: Vault использует Consul storage, поэтому до старта демона должен быть готов
+        #   токен для Vault в FS (маркер consul_tokens выставляет Consul bootstrap).
+        # SECURING: после init/unseal/PKI должны появиться исходные PEM.
         return {
+            StateEnum.INITIALIZING.value: ("vault_init", "vault_initial_pem"),
+            StateEnum.BOOTSTRAPPING.value: ("consul_tokens",),
             StateEnum.SECURING.value: ("vault_init", "vault_initial_pem"),
         }
 

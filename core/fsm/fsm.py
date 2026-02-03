@@ -15,19 +15,17 @@ from core._interfaces import IConfigs, ILogger, IMarkers, IPolicy
 
 class FSM(BaseFSM):
     """
-    Реализация IFSM.
+    Реализация IFSM (TERM-1).
 
-    Цели TERM-1:
+    Цели:
     - фиксированный порядок состояний
     - фиксированная матрица state -> policies
     - минимальная наблюдаемость (HealthSnapshot in-memory)
     - минимальные команды управления: pause/resume/restart/stop
 
     Важно:
-    - FSM не является “самописной оркестрацией всего”: она исполняет матрицу политик.
-    - “Готовность зависимостей / наличие артефактов / запуск демона / регистрация” —
-      всё выражается политиками.
-      
+    - stage_gates проверяются MarkerPolicy, но не FSM.
+    - FSM не пересобирает Deps и не знает про конкретные сервисы.
     """
 
     ORDER: tuple[StateEnum, ...] = (
@@ -48,7 +46,6 @@ class FSM(BaseFSM):
         log: ILogger,
         markers: IMarkers,
         service_name: str,
-        stage_gates: Mapping[StateEnum, Sequence[str]] | None = None,
         policy_matrix: Mapping[StateEnum, Sequence[IPolicy]] | None = None,
     ) -> None:
         super().__init__(
@@ -56,32 +53,10 @@ class FSM(BaseFSM):
             log=log,
             markers=markers,
             service_name=service_name,
-            stage_gates=stage_gates,
-            policy_matrix=policy_matrix,
+            policy_matrix=dict(policy_matrix or {}),
         )
 
-        self._pause = False
-        self._stop = False
-        self._restart = False
-
         self._log.event(EventCodeEnum.FSM_RUN_START, fields={"svc": service_name})
-
-    # --- IFSM commands ---
-
-    def pause(self) -> None:
-        self._pause = True
-        self.transition(StateEnum.PAUSED)
-
-    def resume(self) -> None:
-        self._pause = False
-        # возвращаемся в RUNNING, но фактически цикл сам выставит/продолжит
-        self.transition(StateEnum.RUNNING)
-
-    def restart(self) -> None:
-        self._restart = True
-
-    def stop(self) -> None:
-        self._stop = True
 
     # --- main loop ---
 
@@ -118,7 +93,6 @@ class FSM(BaseFSM):
                     time.sleep(0.2)
                     continue
 
-                # переходы по “линейке”
                 if st == StateEnum.STOPPED:
                     return
 
@@ -171,7 +145,6 @@ class FSM(BaseFSM):
             StateEnum.BOOTSTRAPPING: "FSM_STATE_BOOTSTRAPPING_TIMEOUT_MS",
             StateEnum.SECURING: "FSM_STATE_SECURING_TIMEOUT_MS",
             StateEnum.REGISTERING: "FSM_STATE_REGISTERING_TIMEOUT_MS",
-            StateEnum.RUNNING: "FSM_STATE_RUNNING_TICK_TIMEOUT_MS",  # как “tick” timeout; 0 обычно
             StateEnum.STOPPING: "FSM_STATE_STOPPING_TIMEOUT_MS",
         }
         key = key_map.get(st)
@@ -194,9 +167,8 @@ class FSM(BaseFSM):
         Выполнение одного состояния.
 
         Порядок:
-        1) stage_gates: если есть missing -> RETRY (для bootstrap частей)
-        2) policies: OK/RETRY/FAIL
-        3) deadline: если вышли за deadline -> FAIL
+        1) policies: OK/RETRY/FAIL
+        2) deadline: если вышли за deadline -> FAIL
         """
         enter_ms = self._now_ms()
         deadline_ms = self._state_deadline_ms(st)
@@ -210,16 +182,6 @@ class FSM(BaseFSM):
                 return True
 
             if self.get_state() == StateEnum.PAUSED:
-                time.sleep(0.2)
-                continue
-
-            missing = self.stage_gates_missing(st)
-            if missing:
-                self.publish_state(details={"missing_gates": missing, "state": st.value})
-                # bootstrap-логика: RETRY forever, но respecting deadline если он задан
-                if deadline_ms > 0 and (self._now_ms() - enter_ms) > deadline_ms:
-                    self.publish_state(details={"deadline_ms": deadline_ms, "state": st.value})
-                    return False
                 time.sleep(0.2)
                 continue
 

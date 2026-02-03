@@ -16,9 +16,12 @@ class ConsulRunProfile(IRunProfile):
 
     @property
     def stage_gates(self) -> Mapping[str, Sequence[str]]:
-        # В TERM-1 Consul зависит от Vault PKI (CA + initial PEM), чтобы перейти в SECURING/HTTPS.
-        # REGISTERING можно использовать позже для согласования с другими шагами (например, токены/ACL).
+        # INITIALIZING: вычисление RunMode. 
+        #   Если маркеры bootstrap уже есть -> NORMAL, иначе -> FIRST (HTTP bootstrap-окно).
+        # SECURING: Consul зависит от Vault PKI (CA + initial PEM), чтобы перейти в HTTPS.
+        # REGISTERING: токены ACL должны быть готовы, а TLS уже поднят.
         return {
+            StateEnum.INITIALIZING.value: ("consul_bootstrap", "consul_tokens"),
             StateEnum.SECURING.value: ("vault_init", "vault_initial_pem"),
             StateEnum.REGISTERING.value: ("consul_tokens", "vault_initial_pem"),
         }
