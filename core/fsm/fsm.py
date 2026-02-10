@@ -85,12 +85,12 @@ class FSM(BaseFSM):
 
                 st = self.get_state()
                 if st == StateEnum.PAUSED:
-                    time.sleep(0.2)
+                    time.sleep(self._retry_sleep_s(StateEnum.PAUSED))
                     continue
 
                 # если state не из ORDER (например ERROR/DEGRADED), удерживаем
                 if st not in self.ORDER:
-                    time.sleep(0.2)
+                    time.sleep(self._retry_sleep_s(st))
                     continue
 
                 if st == StateEnum.STOPPED:
@@ -164,18 +164,28 @@ class FSM(BaseFSM):
 
     def _retry_sleep_s(self, st: StateEnum) -> float:
         """
-        Снижение шума логов на RETRY.
+        Backoff для RETRY/ожиданий, чтобы не засорять логи.
 
-        Принцип:
-        - REGISTERING: самая шумная стадия (сетевые флаппы/ACL/ready) -> 1.0s
-        - BOOTSTRAPPING/SECURING: тоже может быть ожидание -> 0.5s
-        - Остальные: 0.2s (как было)
+        Ключи конфигурации:
+        - FSM_RETRY_SLEEP_MS (дефолт 200)
+        - FSM_RETRY_SLEEP_<STATE>_MS (например FSM_RETRY_SLEEP_REGISTERING_MS)
         """
-        if st == StateEnum.REGISTERING:
-            return 1.0
-        if st in (StateEnum.BOOTSTRAPPING, StateEnum.SECURING):
-            return 0.5
-        return 0.2
+        # per-state override
+        key = f"FSM_RETRY_SLEEP_{st.value}_MS"
+        try:
+            v = self._cfg.get(key, None)
+            if v is not None and str(v).strip() != "":
+                ms = int(v)
+                return max(0.05, ms / 1000.0)
+        except Exception:
+            pass
+
+        # global default
+        try:
+            ms = int(self._cfg.get("FSM_RETRY_SLEEP_MS", 200) or 200)
+            return max(0.05, ms / 1000.0)
+        except Exception:
+            return 0.2
 
     def _tick_state(self, st: StateEnum) -> bool:
         """
@@ -197,7 +207,7 @@ class FSM(BaseFSM):
                 return True
 
             if self.get_state() == StateEnum.PAUSED:
-                time.sleep(0.2)
+                time.sleep(self._retry_sleep_s(StateEnum.PAUSED))
                 continue
 
             status = self.run_policies(st)
@@ -212,8 +222,3 @@ class FSM(BaseFSM):
                 return False
 
             time.sleep(self._retry_sleep_s(st))
-
-
-
-
-
