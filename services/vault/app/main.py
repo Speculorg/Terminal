@@ -16,11 +16,6 @@ class VaultRunProfile(IRunProfile):
 
     @property
     def stage_gates(self) -> Mapping[str, Sequence[str]]:
-        # INITIALIZING: вычисление RunMode.
-        #   Если маркеры init уже есть -> NORMAL, иначе -> FIRST (HTTP bootstrap-окно).
-        # BOOTSTRAPPING: Vault использует Consul storage, поэтому до старта демона должен быть готов
-        #   токен для Vault в FS (маркер consul_tokens выставляет Consul bootstrap).
-        # SECURING: после init/unseal/PKI должны появиться исходные PEM.
         return {
             StateEnum.INITIALIZING.value: ("vault_init", "vault_initial_pem"),
             StateEnum.BOOTSTRAPPING.value: ("consul_tokens",),
@@ -29,12 +24,23 @@ class VaultRunProfile(IRunProfile):
 
     @property
     def start_cmd(self) -> Mapping[str, Sequence[str] | str | Any]:
+        # Vault Consul storage требует ACL token (CONSUL_HTTP_TOKEN).
+        # Токен создаёт Consul bootstrap и пишет в FS; здесь подхватываем его без добавления новых сущностей.
         return {
-            "http": ("vault", "server", "-config=/config/vault_http.hcl"),
-            "https": ("vault", "server", "-config=/config/vault_https.hcl"),
+            "http": (
+                "sh",
+                "-ec",
+                'export CONSUL_HTTP_TOKEN="$(cat /fs/terminal/secrets/consul_token_for_vault)"; '
+                "exec vault server -config=/config/vault_http.hcl",
+            ),
+            "https": (
+                "sh",
+                "-ec",
+                'export CONSUL_HTTP_TOKEN="$(cat /fs/terminal/secrets/consul_token_for_vault)"; '
+                "exec vault server -config=/config/vault_https.hcl",
+            ),
         }
 
-    # Duck-typing hooks, используемые BaseService.build_fsm()
     bootstrap_done_markers = ("vault_init", "vault_initial_pem")
     bootstrap_fn = staticmethod(vault_bootstrap)
 

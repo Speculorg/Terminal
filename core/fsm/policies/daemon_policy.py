@@ -24,17 +24,19 @@ class DaemonPolicy(BasePolicy):
     DaemonPolicy управляет запуском демона внутри контейнера и переключением режимов (HTTP/HTTPS).
 
     TERM-1 правила:
-    - INITIALIZING: не запускает демон (только вычисление RunMode через MarkerPolicy).
+    - INITIALIZING: не запускает демон (только RunMode через MarkerPolicy).
     - BOOTSTRAPPING:
         - RunMode.FIRST  -> стартуем HTTP (если задан start_cmd["http"])
-        - RunMode.NORMAL -> стартуем HTTPS
-    - SECURING: гарантируем HTTPS
-    - RUNNING: контролируем, что процесс жив, и применяем auto-reload TLS при изменении PEM файлов.
+        - RunMode.NORMAL -> no-op (демон стартуем только на SECURING)
+    - SECURING: гарантируем HTTPS (после того как stage_gates разрешат вход в стадию).
+    - RUNNING: supervise процесса:
+        - если процесс умер — пробуем перезапустить (без рестарта контейнера)
+        - при изменении TLS bundle отправляем сигнал или делаем restart (внутри контейнера)
     - STOPPING: останавливаем процесс.
 
-    TLS reload:
-    - Если задан DAEMON_TLS_RELOAD_SIGNAL (например SIGHUP), при изменении TLS bundle отправляем сигнал процессу.
-    - Иначе выполняем restart процесса (внутри контейнера, без рестарта контейнера).
+    Важно:
+    - Мы НЕ валим контейнер при падении демона: вместо FAIL делаем RETRY (автосходимость).
+    - Троттлинг рестартов задаётся DAEMON_RESTART_BACKOFF_MS (default 500ms).
     """
 
     def __init__(
@@ -54,7 +56,6 @@ class DaemonPolicy(BasePolicy):
         self._runner = runner
         self._run_mode_ref = run_mode_ref
 
-        # start_cmd: https обязателен, http опционален
         https_cmd = list(start_cmd.get(DaemonMode.HTTPS.value, ()) or ())
         http_cmd = list(start_cmd.get(DaemonMode.HTTP.value, ()) or ())
 
@@ -66,7 +67,6 @@ class DaemonPolicy(BasePolicy):
 
         self._current_mode: Optional[DaemonMode] = None
 
-        # TLS reload settings
         self._tls = tls
         self._tls_bundle = list(tls_bundle or ())
         self._tls_poll_ms = int(self._cfg.get("TLS_WATCH_POLL_INTERVAL_MS", 500) or 500)
@@ -74,6 +74,10 @@ class DaemonPolicy(BasePolicy):
         self._tls_last_fp: Optional[str] = None
 
         self._reload_signal = self._parse_signal(str(self._cfg.get("DAEMON_TLS_RELOAD_SIGNAL", "") or ""))
+
+        # throttle to avoid hot-loop restarts
+        self._restart_backoff_ms = int(self._cfg.get("DAEMON_RESTART_BACKOFF_MS", 500) or 500)
+        self._next_restart_ms: int = 0
 
     @staticmethod
     def _parse_signal(raw: str) -> Optional[int]:
@@ -89,21 +93,23 @@ class DaemonPolicy(BasePolicy):
 
     def _run_impl(self, *, state: StateEnum):
         if state == StateEnum.INITIALIZING:
-            # По требованиям: INITIALIZING не поднимает демон.
             return self.ok(details={"skip": True})
 
         if state == StateEnum.BOOTSTRAPPING:
-            desired = self._desired_mode_bootstrapping()
-            return self._ensure_mode(desired)
+            run_mode = self._get_run_mode()
+            if run_mode == RunModeEnum.NORMAL:
+                # В NORMAL демон поднимаем только на SECURING (после stage_gates и готового TLS).
+                return self.ok(details={"skip": True, "reason": "bootstrapping_noop_in_normal"})
+            return self._ensure_mode(DaemonMode.HTTP)
 
         if state == StateEnum.SECURING:
             return self._ensure_mode(DaemonMode.HTTPS)
 
         if state == StateEnum.RUNNING:
+            # supervise: если процесс умер — пробуем поднять обратно
             if not self._runner.is_alive():
-                return self.fail(error_code=ErrorCodeEnum.ERR_PROC, reason="daemon_process_dead")
+                return self._recover_in_running()
 
-            # TLS auto-reload (best-effort)
             self._maybe_reload_tls()
             return self.ok(details={"daemon_alive": True, "mode": (self._current_mode or DaemonMode.HTTPS).value})
 
@@ -117,47 +123,50 @@ class DaemonPolicy(BasePolicy):
 
         return self.ok(details={"skip": True})
 
-    def _desired_mode_bootstrapping(self) -> DaemonMode:
-        """
-        Определяем желаемый режим демона на стадии BOOTSTRAPPING.
+    def _recover_in_running(self):
+        now_ms = int(time.time() * 1000)
+        if now_ms < self._next_restart_ms:
+            return self.retry(reason="daemon_dead_wait_backoff", details={"next_restart_ms": self._next_restart_ms})
 
-        Источник истины: run_mode_ref["run_mode"], выставляется MarkerPolicy в INITIALIZING.
-        """
+        self._next_restart_ms = now_ms + max(50, self._restart_backoff_ms)
+
+        # В RUNNING мы должны поддерживать HTTPS (TERM-1).
+        desired_mode = self._current_mode or DaemonMode.HTTPS
+        desired_cmd = self._cmd_https if desired_mode == DaemonMode.HTTPS else (self._cmd_http or self._cmd_https)
+
+        try:
+            self._runner.start(spec=DaemonSpec(cmd=desired_cmd))
+            self._current_mode = desired_mode
+            self._log.event(EventCodeEnum.DAEMON_RESTART, fields={"svc": self._cfg.service_name, "mode": desired_mode.value})
+            return self.retry(reason="daemon_restarted_after_death", details={"mode": desired_mode.value})
+        except Exception as e:
+            # Не FAIL: держим контейнер живым, чтобы видеть логи и дать системе шанс автосойтись.
+            return self.retry(reason=f"daemon_restart_error:{type(e).__name__}", details={"mode": desired_mode.value})
+
+    def _get_run_mode(self) -> RunModeEnum:
         raw = self._run_mode_ref.get("run_mode", RunModeEnum.NORMAL)
-        run_mode: RunModeEnum
         if isinstance(raw, RunModeEnum):
-            run_mode = raw
-        else:
-            s = str(raw).strip().upper()
-            if "FIRST" in s:
-                run_mode = RunModeEnum.FIRST
-            elif "NORMAL" in s:
-                run_mode = RunModeEnum.NORMAL
-            else:
-                run_mode = RunModeEnum.NORMAL
-
-        if run_mode == RunModeEnum.FIRST:
-            return DaemonMode.HTTP
-
-        return DaemonMode.HTTPS
+            return raw
+        s = str(raw).strip().upper()
+        if "FIRST" in s:
+            return RunModeEnum.FIRST
+        if "NORMAL" in s:
+            return RunModeEnum.NORMAL
+        return RunModeEnum.NORMAL
 
     def _ensure_mode(self, mode: DaemonMode):
-        try:
-            desired_cmd = self._cmd_https if mode == DaemonMode.HTTPS else (self._cmd_http or [])
-            if not desired_cmd:
-                # Явная ошибка RunProfile: объявили необходимость HTTP (RunMode.FIRST),
-                # но не предоставили start_cmd['http'].
-                return self.fail(error_code=ErrorCodeEnum.ERR_CONFIG, reason=f"daemon_cmd_missing:{mode.value}")
+        desired_cmd = self._cmd_https if mode == DaemonMode.HTTPS else (self._cmd_http or [])
+        if not desired_cmd:
+            return self.fail(error_code=ErrorCodeEnum.ERR_CONFIG, reason=f"daemon_cmd_missing:{mode.value}")
 
+        try:
             if not self._runner.is_alive():
                 self._runner.start(spec=DaemonSpec(cmd=desired_cmd))
                 self._current_mode = mode
                 self._log.event(EventCodeEnum.DAEMON_START, fields={"svc": self._cfg.service_name, "mode": mode.value})
                 return self.ok(details={"daemon_started": True, "mode": mode.value})
 
-            # если живой процесс, но режим должен измениться -> restart
             if self._current_mode is not None and self._current_mode != mode:
-                # если команды идентичны — рестарт не нужен
                 cur_cmd = self._cmd_https if self._current_mode == DaemonMode.HTTPS else (self._cmd_http or [])
                 if list(cur_cmd) == list(desired_cmd):
                     self._current_mode = mode
@@ -165,16 +174,14 @@ class DaemonPolicy(BasePolicy):
 
                 self._runner.restart(spec=DaemonSpec(cmd=desired_cmd), stop_timeout_ms=5000)
                 self._current_mode = mode
-                code = EventCodeEnum.DAEMON_SWITCH_HTTPS if mode == DaemonMode.HTTPS else EventCodeEnum.DAEMON_SWITCH_HTTP
-                self._log.event(code, fields={"svc": self._cfg.service_name, "mode": mode.value})
+                self._log.event(EventCodeEnum.DAEMON_SWITCH_MODE, fields={"svc": self._cfg.service_name, "mode": mode.value})
                 return self.ok(details={"daemon_restarted": True, "mode": mode.value})
 
-            # режим уже нужный
             self._current_mode = mode
             return self.ok(details={"daemon_alive": True, "mode": mode.value})
 
         except Exception as e:
-            return self.retry(reason=f"daemon_start_error:{type(e).__name__}")
+            return self.retry(reason=f"daemon_start_error:{type(e).__name__}", details={"mode": mode.value})
 
     def _maybe_reload_tls(self) -> None:
         if not self._tls_bundle:
@@ -216,32 +223,25 @@ class DaemonPolicy(BasePolicy):
         return h.hexdigest()
 
     def _reload_tls(self) -> None:
-        """
-        Best-effort: попытаться применить новые PEM.
+        if not self._runner.is_alive():
+            return
 
-        Факт: ядро умеет только два механизма:
-        - отправить сигнал (если задан DAEMON_TLS_RELOAD_SIGNAL)
-        - выполнить restart процесса
-
-        Как конкретный демон реагирует на сигнал — ответственность его конфигурации/документации.
-        """
-        try:
-            sig = self._reload_signal
-            if sig is not None:
-                self._runner.send_signal(sig)
+        # 1) signal (preferred)
+        if self._reload_signal is not None:
+            try:
+                self._runner.send_signal(int(self._reload_signal))
                 self._log.event(
                     EventCodeEnum.TLS_RELOAD,
-                    fields={"svc": self._cfg.service_name, "strategy": "signal", "signal": int(sig)},
+                    fields={"svc": self._cfg.service_name, "action": "signal", "sig": int(self._reload_signal)},
                 )
                 return
+            except Exception:
+                pass
 
-            mode = self._current_mode or DaemonMode.HTTPS
-            cmd = self._cmd_https if mode == DaemonMode.HTTPS else (self._cmd_http or self._cmd_https)
+        # 2) restart process (fallback)
+        try:
+            cmd = self._cmd_https if (self._current_mode or DaemonMode.HTTPS) == DaemonMode.HTTPS else (self._cmd_http or self._cmd_https)
             self._runner.restart(spec=DaemonSpec(cmd=cmd), stop_timeout_ms=5000)
-            self._log.event(
-                EventCodeEnum.TLS_RELOAD,
-                fields={"svc": self._cfg.service_name, "strategy": "restart", "mode": mode.value},
-            )
-
+            self._log.event(EventCodeEnum.TLS_RELOAD, fields={"svc": self._cfg.service_name, "action": "restart"})
         except Exception:
-            return
+            pass

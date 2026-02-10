@@ -162,6 +162,21 @@ class FSM(BaseFSM):
         except Exception:
             return 1.0
 
+    def _retry_sleep_s(self, st: StateEnum) -> float:
+        """
+        Снижение шума логов на RETRY.
+
+        Принцип:
+        - REGISTERING: самая шумная стадия (сетевые флаппы/ACL/ready) -> 1.0s
+        - BOOTSTRAPPING/SECURING: тоже может быть ожидание -> 0.5s
+        - Остальные: 0.2s (как было)
+        """
+        if st == StateEnum.REGISTERING:
+            return 1.0
+        if st in (StateEnum.BOOTSTRAPPING, StateEnum.SECURING):
+            return 0.5
+        return 0.2
+
     def _tick_state(self, st: StateEnum) -> bool:
         """
         Выполнение одного состояния.
@@ -195,4 +210,10 @@ class FSM(BaseFSM):
             if deadline_ms > 0 and (self._now_ms() - enter_ms) > deadline_ms:
                 self.publish_state(details={"deadline_ms": deadline_ms, "state": st.value})
                 return False
-            time.sleep(0.2)
+
+            time.sleep(self._retry_sleep_s(st))
+
+
+
+
+

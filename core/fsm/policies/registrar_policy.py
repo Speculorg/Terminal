@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from typing import Optional, Sequence
 
 from core._base import BasePolicy
-from core._entities import ErrorCodeEnum, StateEnum
+from core._entities import StateEnum
 from core._interfaces import IConfigs, IRegistrar
 
 
@@ -23,10 +23,11 @@ class RegistrarPolicy(BasePolicy):
     """
     RegistrarPolicy регистрирует сервис и поддерживает TTL heartbeat.
 
-    TERM-1 вариант B:
-    - stage-gates завязаны на маркеры (сетевые проверки живут в политиках/ACL)
-    - REGISTERING: register() с TTL check
-    - RUNNING: периодический heartbeat(check_id) (throttle по REGISTRAR_HEARTBEAT_PERIOD_SEC)
+    TERM-1 (автосходимость):
+    - Ошибки Consul/DNS/TLS/сетевые флаппы при регистрации НЕ фатальны.
+      Политика всегда возвращает RETRY, а не FAIL.
+    - REGISTERING: register() + TTL check
+    - RUNNING: периодический heartbeat(check_id)
 
     Защита от "шторма":
     - cooldown на повторную регистрацию (REGISTRAR_REREGISTRATION_COOLDOWN_SEC)
@@ -77,7 +78,10 @@ class RegistrarPolicy(BasePolicy):
                     return self.ok(details={"registered": False, "reason": "cooldown", "check_id": self._check_id})
 
                 if self._window_attempts >= max_attempts:
-                    return self.retry(reason="reregistration_rate_limited", details={"check_id": self._check_id, "attempts": self._window_attempts})
+                    return self.retry(
+                        reason="reregistration_rate_limited",
+                        details={"check_id": self._check_id, "attempts": self._window_attempts},
+                    )
 
                 self._window_attempts += 1
 
@@ -104,7 +108,13 @@ class RegistrarPolicy(BasePolicy):
             return self.ok(details={"skip": True})
 
         except RuntimeError as e:
-            # нормализованный runtime error от Registrar adapter
+            # Нормализованный retryable runtime error от Registrar adapter
             return self.retry(reason=str(e), details={"check_id": self._check_id})
+
         except Exception as e:
-            return self.fail(error_code=ErrorCodeEnum.ERR_REGISTRY, reason=f"registrar_error:{type(e).__name__}", details={"check_id": self._check_id})
+            # TERM-1: регистрация/heartbeat НЕ должна валить контейнер.
+            # Любые сетевые/DNS/TLS флаппы -> RETRY.
+            return self.retry(
+                reason=f"registrar_error:{type(e).__name__}",
+                details={"check_id": self._check_id, "exc": str(e)[:256]},
+            )

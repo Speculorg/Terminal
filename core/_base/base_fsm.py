@@ -3,7 +3,7 @@ from __future__ import annotations
 import time
 from typing import Dict, Sequence
 
-from core._entities import HealthSnapshotType, PolicyStatusEnum, StateEnum
+from core._entities import EventCodeEnum, HealthSnapshotType, PolicyStatusEnum, StateEnum
 from core._interfaces import IConfigs, IFSM, ILogger, IMarkers, IPolicy
 
 
@@ -93,9 +93,19 @@ class BaseFSM(IFSM):
     # --- helpers ---
 
     def transition(self, state: StateEnum) -> None:
+        prev = self._state
         self._state = state
         self._since_ms = self._now_ms()
         self.publish_state(details={"transition": state.value})
+
+        # минимальная наблюдаемость переходов (без зависимости от конкретных политик)
+        try:
+            self._log.event(
+                EventCodeEnum.FSM_TRANSITION,
+                fields={"svc": self._svc, "from": prev.value, "to": state.value},
+            )
+        except Exception:
+            pass
 
     def publish_state(self, *, health: dict[str, object] | None = None, details: dict[str, object] | None = None) -> None:
         self._health["state"] = self._state
@@ -115,13 +125,52 @@ class BaseFSM(IFSM):
         - RETRY: немедленно прекращаем выполнение остальных политик и остаёмся в состоянии
         - FAIL: немедленно прекращаем и считаем ошибкой
 
-        Примечание:
-        - Детализация причин RETRY/FAIL логируется на уровне политик и/или FSM (верхний уровень).
+        Важно:
+        - логируем RETRY/FAIL на уровне FSM, чтобы не терять причины
+          (политики могут быть минималистичными и не писать лог самостоятельно).
         """
         for p in self._policy_matrix.get(state, ()) or ():
+            try:
+                self._log.event(
+                    EventCodeEnum.POLICY_RUN_START,
+                    fields={"svc": self._svc, "state": state.value, "policy": p.name},
+                )
+            except Exception:
+                pass
+
             r = p.run(state=state)
             status = r.get("status", PolicyStatusEnum.FAIL)
+            details = r.get("details", {}) if isinstance(r, dict) else {}
+
             if status == PolicyStatusEnum.OK:
+                try:
+                    self._log.event(
+                        EventCodeEnum.POLICY_RUN_OK,
+                        fields={"svc": self._svc, "state": state.value, "policy": p.name, "details": details},
+                    )
+                except Exception:
+                    pass
                 continue
-            return status
+
+            if status == PolicyStatusEnum.RETRY:
+                try:
+                    self._log.event(
+                        EventCodeEnum.POLICY_RUN_RETRY,
+                        fields={"svc": self._svc, "state": state.value, "policy": p.name, "details": details},
+                    )
+                except Exception:
+                    pass
+                return PolicyStatusEnum.RETRY
+
+            # FAIL
+            try:
+                self._log.event(
+                    EventCodeEnum.POLICY_RUN_FAIL,
+                    level="ERROR",
+                    fields={"svc": self._svc, "state": state.value, "policy": p.name, "details": details},
+                )
+            except Exception:
+                pass
+            return PolicyStatusEnum.FAIL
+
         return PolicyStatusEnum.OK
