@@ -11,15 +11,15 @@ class BaseFSM(IFSM):
     """
     Базовый каркас FSM.
 
-    Инварианты:
-    - хранит текущее состояние
-    - хранит матрицу "state -> policies" (фиксированный порядок внутри состояния)
-    - публикует HealthSnapshot (in-memory)
-    - предоставляет базовые команды управления (pause/resume/restart/stop)
-
     Важно:
     - stage_gates не проверяются самим FSM; это ответственность MarkerPolicy.
-      (RunProfile.stage_gates -> MarkerPolicy)
+    - FSM не должен создавать зависимостей и не должен знать о конкретных сервисах.
+
+    Наблюдаемость:
+    - Всегда логируем переходы FSM.
+    - Логи политик:
+        - По умолчанию: только RETRY/FAIL (чтобы не засорять логи в TERM-1).
+        - Подробно (verbose): START/OK тоже логируются, если FSM_VERBOSE_POLICY_LOGS=1.
     """
 
     def __init__(
@@ -41,7 +41,6 @@ class BaseFSM(IFSM):
 
         self._policy_matrix: Dict[StateEnum, Sequence[IPolicy]] = dict(policy_matrix or {})
 
-        # IFSM command flags
         self._pause = False
         self._stop = False
         self._restart = False
@@ -56,9 +55,25 @@ class BaseFSM(IFSM):
             "details": {},
         }
 
+        self._verbose_policy_logs = self._cfg_bool("FSM_VERBOSE_POLICY_LOGS", default=False)
+
     @staticmethod
     def _now_ms() -> int:
         return int(time.time() * 1000)
+
+    def _cfg_bool(self, key: str, default: bool) -> bool:
+        try:
+            v = self._cfg.get(key, None)
+            if v is None:
+                return bool(default)
+            s = str(v).strip().lower()
+            if s in ("1", "true", "yes", "on"):
+                return True
+            if s in ("0", "false", "no", "off"):
+                return False
+            return bool(default)
+        except Exception:
+            return bool(default)
 
     # --- IFSM commands ---
 
@@ -68,7 +83,6 @@ class BaseFSM(IFSM):
 
     def resume(self) -> None:
         self._pause = False
-        # минимально: возвращаемся в RUNNING; фактический цикл сам продолжит выполнение
         self.transition(StateEnum.RUNNING)
 
     def restart(self) -> None:
@@ -98,7 +112,6 @@ class BaseFSM(IFSM):
         self._since_ms = self._now_ms()
         self.publish_state(details={"transition": state.value})
 
-        # минимальная наблюдаемость переходов (без зависимости от конкретных политик)
         try:
             self._log.event(
                 EventCodeEnum.FSM_TRANSITION,
@@ -122,34 +135,36 @@ class BaseFSM(IFSM):
 
         Семантика:
         - OK: продолжаем
-        - RETRY: немедленно прекращаем выполнение остальных политик и остаёмся в состоянии
-        - FAIL: немедленно прекращаем и считаем ошибкой
+        - RETRY: прекращаем выполнение остальных политик и остаёмся в состоянии
+        - FAIL: прекращаем и считаем ошибкой
 
-        Важно:
-        - логируем RETRY/FAIL на уровне FSM, чтобы не терять причины
-          (политики могут быть минималистичными и не писать лог самостоятельно).
+        Логирование:
+        - по умолчанию: только RETRY/FAIL (TERM-1 без шума)
+        - verbose: START/OK тоже логируются
         """
         for p in self._policy_matrix.get(state, ()) or ():
-            try:
-                self._log.event(
-                    EventCodeEnum.POLICY_RUN_START,
-                    fields={"svc": self._svc, "state": state.value, "policy": p.name},
-                )
-            except Exception:
-                pass
+            if self._verbose_policy_logs:
+                try:
+                    self._log.event(
+                        EventCodeEnum.POLICY_RUN_START,
+                        fields={"svc": self._svc, "state": state.value, "policy": p.name},
+                    )
+                except Exception:
+                    pass
 
             r = p.run(state=state)
             status = r.get("status", PolicyStatusEnum.FAIL)
             details = r.get("details", {}) if isinstance(r, dict) else {}
 
             if status == PolicyStatusEnum.OK:
-                try:
-                    self._log.event(
-                        EventCodeEnum.POLICY_RUN_OK,
-                        fields={"svc": self._svc, "state": state.value, "policy": p.name, "details": details},
-                    )
-                except Exception:
-                    pass
+                if self._verbose_policy_logs:
+                    try:
+                        self._log.event(
+                            EventCodeEnum.POLICY_RUN_OK,
+                            fields={"svc": self._svc, "state": state.value, "policy": p.name, "details": details},
+                        )
+                    except Exception:
+                        pass
                 continue
 
             if status == PolicyStatusEnum.RETRY:
@@ -162,7 +177,6 @@ class BaseFSM(IFSM):
                     pass
                 return PolicyStatusEnum.RETRY
 
-            # FAIL
             try:
                 self._log.event(
                     EventCodeEnum.POLICY_RUN_FAIL,

@@ -24,14 +24,11 @@ class RegistrarPolicy(BasePolicy):
     RegistrarPolicy регистрирует сервис и поддерживает TTL heartbeat.
 
     TERM-1 (автосходимость):
-    - Ошибки Consul/DNS/TLS/сетевые флаппы при регистрации НЕ фатальны.
-      Политика всегда возвращает RETRY, а не FAIL.
-    - REGISTERING: register() + TTL check
-    - RUNNING: периодический heartbeat(check_id)
-
-    Защита от "шторма":
-    - cooldown на повторную регистрацию (REGISTRAR_REREGISTRATION_COOLDOWN_SEC)
-    - max попыток повторной регистрации в окне (REGISTRAR_MAX_REREG_ATTEMPTS_PER_WINDOW)
+    - REGISTERING: блокирующая регистрация (RETRY пока не зарегистрировались)
+    - RUNNING: НЕ блокирует состояние (никогда не RETRY), работает с backoff и самовосстановлением:
+        - если registration/check отсутствуют -> (пере)регистрируется
+        - если ACL ещё не готова -> увеличивает backoff
+        - если check_id неизвестен (404) -> считает регистрацию потерянной и инициирует re-register
     """
 
     def __init__(self, *, cfg: IConfigs, registrar: IRegistrar, spec: RegistrarSpec) -> None:
@@ -43,8 +40,18 @@ class RegistrarPolicy(BasePolicy):
         self._check_id = spec.check_id or f"service:{spec.service}:ttl"
 
         # state
+        self._registered: bool = False
+
         self._last_register_mon: float = 0.0
         self._last_heartbeat_mon: float = 0.0
+
+        self._next_register_mon: float = 0.0
+        self._next_heartbeat_mon: float = 0.0
+
+        self._register_fail_streak: int = 0
+        self._heartbeat_fail_streak: int = 0
+
+        # rate limit window for REGISTERING
         self._window_start_mon: float = time.monotonic()
         self._window_attempts: int = 0
 
@@ -53,6 +60,34 @@ class RegistrarPolicy(BasePolicy):
             return int(self._cfg.get(key, default) or default)
         except Exception:
             return int(default)
+
+    @staticmethod
+    def _backoff_sec(streak: int, *, base: float, cap: float) -> float:
+        v = base * (1.7 ** max(0, streak))
+        return cap if v > cap else v
+
+    @staticmethod
+    def _is_acl_not_ready(reason: str) -> bool:
+        r = (reason or "").lower()
+        return ("acl system must be bootstrapped" in r) or ("acl not found" in r)
+
+    @staticmethod
+    def _is_unknown_check(reason: str) -> bool:
+        r = (reason or "").lower()
+        return ("unknown check id" in r) or ("404" in r and "check" in r)
+
+    def _register_once(self, *, ttl_sec: int) -> None:
+        self._registrar.register(
+            service=self._spec.service,
+            address=self._spec.address,
+            port=int(self._spec.port),
+            tags=self._spec.tags,
+            check_id=self._check_id,
+            ttl_seconds=int(ttl_sec) if ttl_sec else None,
+        )
+
+    def _heartbeat_once(self) -> None:
+        self._registrar.heartbeat(check_id=self._check_id)
 
     def _run_impl(self, *, state: StateEnum):
         now = time.monotonic()
@@ -66,55 +101,132 @@ class RegistrarPolicy(BasePolicy):
         window_sec = max(1, self._cfg_int("REGISTRAR_DEREGISTER_CRITICAL_SERVICE_AFTER_SEC", 45))
         max_attempts = max(1, self._cfg_int("REGISTRAR_MAX_REREG_ATTEMPTS_PER_WINDOW", 5))
 
-        try:
-            if state == StateEnum.REGISTERING:
-                # window reset
-                if (now - self._window_start_mon) >= float(window_sec):
-                    self._window_start_mon = now
-                    self._window_attempts = 0
+        # backoff tuning (не делаем обязательными: берём defaults)
+        reg_backoff_base = float(self._cfg_int("REGISTRAR_BACKOFF_BASE_SEC", 1))
+        reg_backoff_cap = float(self._cfg_int("REGISTRAR_BACKOFF_CAP_SEC", 30))
+        hb_backoff_base = float(self._cfg_int("REGISTRAR_HEARTBEAT_BACKOFF_BASE_SEC", 2))
+        hb_backoff_cap = float(self._cfg_int("REGISTRAR_HEARTBEAT_BACKOFF_CAP_SEC", 30))
 
-                # cooldown
+        # ---------------- REGISTERING (blocking) ----------------
+        if state == StateEnum.REGISTERING:
+            # window reset
+            if (now - self._window_start_mon) >= float(window_sec):
+                self._window_start_mon = now
+                self._window_attempts = 0
+
+            # cooldown after success
+            if self._last_register_mon and (now - self._last_register_mon) < float(cooldown):
+                return self.retry(reason="cooldown", details={"check_id": self._check_id})
+
+            # explicit backoff after errors
+            if self._next_register_mon and now < self._next_register_mon:
+                wait_s = round(self._next_register_mon - now, 3)
+                return self.retry(reason="register_backoff", details={"check_id": self._check_id, "wait_s": wait_s})
+
+            # rate limit window
+            if self._window_attempts >= max_attempts:
+                self._next_register_mon = now + 1.0
+                return self.retry(
+                    reason="reregistration_rate_limited",
+                    details={"check_id": self._check_id, "attempts": self._window_attempts},
+                )
+            self._window_attempts += 1
+
+            try:
+                self._register_once(ttl_sec=int(ttl_sec))
+                self._registered = True
+                self._last_register_mon = now
+                self._last_heartbeat_mon = now
+                self._next_heartbeat_mon = now + float(heartbeat_period)
+                self._register_fail_streak = 0
+                return self.ok(details={"registered": True, "check_id": self._check_id, "ttl_sec": ttl_sec})
+
+            except RuntimeError as e:
+                reason = str(e)
+                extra = 2.0 if self._is_acl_not_ready(reason) else 0.0
+                self._register_fail_streak += 1
+                backoff = self._backoff_sec(self._register_fail_streak, base=reg_backoff_base, cap=reg_backoff_cap) + extra
+                self._next_register_mon = now + backoff
+                return self.retry(reason=reason, details={"check_id": self._check_id, "backoff_s": round(backoff, 3)})
+
+            except Exception as e:
+                self._register_fail_streak += 1
+                backoff = self._backoff_sec(self._register_fail_streak, base=reg_backoff_base, cap=reg_backoff_cap)
+                self._next_register_mon = now + backoff
+                return self.retry(
+                    reason=f"registrar_error:{type(e).__name__}",
+                    details={"check_id": self._check_id, "backoff_s": round(backoff, 3), "exc": str(e)[:256]},
+                )
+
+        # ---------------- RUNNING (non-blocking) ----------------
+        if state == StateEnum.RUNNING:
+            # 1) if not registered -> background register (NO RETRY)
+            if not self._registered:
+                if self._next_register_mon and now < self._next_register_mon:
+                    return self.ok(details={"registered": False, "reason": "register_backoff", "check_id": self._check_id, "wait_s": round(self._next_register_mon - now, 3)})
+
                 if self._last_register_mon and (now - self._last_register_mon) < float(cooldown):
                     return self.ok(details={"registered": False, "reason": "cooldown", "check_id": self._check_id})
 
-                if self._window_attempts >= max_attempts:
-                    return self.retry(
-                        reason="reregistration_rate_limited",
-                        details={"check_id": self._check_id, "attempts": self._window_attempts},
-                    )
+                try:
+                    self._register_once(ttl_sec=int(ttl_sec))
+                    self._registered = True
+                    self._last_register_mon = now
+                    self._last_heartbeat_mon = now
+                    self._next_heartbeat_mon = now + float(heartbeat_period)
+                    self._register_fail_streak = 0
+                    return self.ok(details={"registered": True, "check_id": self._check_id, "ttl_sec": ttl_sec})
 
-                self._window_attempts += 1
+                except RuntimeError as e:
+                    reason = str(e)
+                    extra = 2.0 if self._is_acl_not_ready(reason) else 0.0
+                    self._register_fail_streak += 1
+                    backoff = self._backoff_sec(self._register_fail_streak, base=reg_backoff_base, cap=reg_backoff_cap) + extra
+                    self._next_register_mon = now + backoff
+                    return self.ok(details={"registered": False, "reason": reason, "check_id": self._check_id, "backoff_s": round(backoff, 3)})
 
-                self._registrar.register(
-                    service=self._spec.service,
-                    address=self._spec.address,
-                    port=int(self._spec.port),
-                    tags=self._spec.tags,
-                    check_id=self._check_id,
-                    ttl_seconds=int(ttl_sec) if ttl_sec else None,
-                )
-                self._last_register_mon = now
+                except Exception as e:
+                    self._register_fail_streak += 1
+                    backoff = self._backoff_sec(self._register_fail_streak, base=reg_backoff_base, cap=reg_backoff_cap)
+                    self._next_register_mon = now + backoff
+                    return self.ok(details={"registered": False, "reason": f"registrar_error:{type(e).__name__}", "check_id": self._check_id, "backoff_s": round(backoff, 3), "exc": str(e)[:256]})
+
+            # 2) heartbeat with backoff (NO RETRY)
+            if self._next_heartbeat_mon and now < self._next_heartbeat_mon:
+                return self.ok(details={"heartbeat": False, "reason": "throttle", "check_id": self._check_id})
+
+            if self._last_heartbeat_mon and (now - self._last_heartbeat_mon) < float(heartbeat_period):
+                self._next_heartbeat_mon = self._last_heartbeat_mon + float(heartbeat_period)
+                return self.ok(details={"heartbeat": False, "reason": "throttle", "check_id": self._check_id})
+
+            try:
+                self._heartbeat_once()
                 self._last_heartbeat_mon = now
-                return self.ok(details={"registered": True, "check_id": self._check_id, "ttl_sec": ttl_sec})
-
-            if state == StateEnum.RUNNING:
-                if (now - self._last_heartbeat_mon) < float(heartbeat_period):
-                    return self.ok(details={"heartbeat": False, "reason": "throttle", "check_id": self._check_id})
-
-                self._registrar.heartbeat(check_id=self._check_id)
-                self._last_heartbeat_mon = now
+                self._next_heartbeat_mon = now + float(heartbeat_period)
+                self._heartbeat_fail_streak = 0
                 return self.ok(details={"heartbeat": True, "check_id": self._check_id})
 
-            return self.ok(details={"skip": True})
+            except RuntimeError as e:
+                reason = str(e)
 
-        except RuntimeError as e:
-            # Нормализованный retryable runtime error от Registrar adapter
-            return self.retry(reason=str(e), details={"check_id": self._check_id})
+                # lost check -> re-register
+                if self._is_unknown_check(reason):
+                    self._registered = False
+                    self._heartbeat_fail_streak = 0
+                    self._register_fail_streak = 0
+                    self._next_register_mon = now + 1.0
+                    return self.ok(details={"heartbeat": False, "reason": reason, "action": "reregister", "check_id": self._check_id})
 
-        except Exception as e:
-            # TERM-1: регистрация/heartbeat НЕ должна валить контейнер.
-            # Любые сетевые/DNS/TLS флаппы -> RETRY.
-            return self.retry(
-                reason=f"registrar_error:{type(e).__name__}",
-                details={"check_id": self._check_id, "exc": str(e)[:256]},
-            )
+                extra = 2.0 if self._is_acl_not_ready(reason) else 0.0
+                self._heartbeat_fail_streak += 1
+                backoff = self._backoff_sec(self._heartbeat_fail_streak, base=hb_backoff_base, cap=hb_backoff_cap) + extra
+                self._next_heartbeat_mon = now + backoff
+                return self.ok(details={"heartbeat": False, "reason": reason, "check_id": self._check_id, "backoff_s": round(backoff, 3)})
+
+            except Exception as e:
+                self._heartbeat_fail_streak += 1
+                backoff = self._backoff_sec(self._heartbeat_fail_streak, base=hb_backoff_base, cap=hb_backoff_cap)
+                self._next_heartbeat_mon = now + backoff
+                return self.ok(details={"heartbeat": False, "reason": f"registrar_error:{type(e).__name__}", "check_id": self._check_id, "backoff_s": round(backoff, 3), "exc": str(e)[:256]})
+
+        return self.ok(details={"skip": True})

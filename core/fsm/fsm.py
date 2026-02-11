@@ -167,7 +167,7 @@ class FSM(BaseFSM):
         Backoff для RETRY/ожиданий, чтобы не засорять логи.
 
         Ключи конфигурации:
-        - FSM_RETRY_SLEEP_MS (дефолт 200)
+        - FSM_RETRY_SLEEP_MS (дефолт 1000)
         - FSM_RETRY_SLEEP_<STATE>_MS (например FSM_RETRY_SLEEP_REGISTERING_MS)
         """
         # per-state override
@@ -182,10 +182,10 @@ class FSM(BaseFSM):
 
         # global default
         try:
-            ms = int(self._cfg.get("FSM_RETRY_SLEEP_MS", 200) or 200)
+            ms = int(self._cfg.get("FSM_RETRY_SLEEP_MS", 1000) or 1000)
             return max(0.05, ms / 1000.0)
         except Exception:
-            return 0.2
+            return 1
 
     def _tick_state(self, st: StateEnum) -> bool:
         """
