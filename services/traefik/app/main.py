@@ -19,8 +19,8 @@ class TraefikRunProfile(IRunProfile):
         return {
             StateEnum.BOOTSTRAPPING.value: ("vault_initial_pem", "consul_tokens"),
             StateEnum.SECURING.value: ("vault_initial_pem", "consul_tokens"),
-            # регистрация только после готовности токенов Consul
-            StateEnum.REGISTERING.value: ("consul_tokens",),
+            # регистрация только после готовности токенов Consul и готовности самого Consul
+            StateEnum.REGISTERING.value: ("consul_tokens", "consul_ready"),
         }
 
     @property

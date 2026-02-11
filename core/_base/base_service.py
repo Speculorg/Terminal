@@ -192,6 +192,7 @@ class BaseService(IService):
             registrar_policy = RegistrarPolicy(
                 cfg=deps.cfg,
                 registrar=deps.registrar,
+                markers=deps.markers,
                 spec=RegistrarSpec(
                     service=svc_name,
                     address=address,
@@ -221,6 +222,14 @@ class BaseService(IService):
 
         deps = self._deps_factory.build()
         self._deps = deps
+
+        # Volatile readiness markers: на каждом запуске очищаем "<service>_ready",
+        # чтобы stage_gates могли корректно "ждать готовности" на повторных стартах.
+        try:
+            svc_name = str(getattr(deps.cfg, "service_name", "unknown"))
+            deps.markers.delete(f"{svc_name}_ready")
+        except Exception:
+            pass
 
         svc = getattr(deps.cfg, "service_name", "unknown")
         self._snapshot = {
@@ -267,12 +276,5 @@ class BaseService(IService):
             return
         self._fsm.stop()
 
-    def get_state(self) -> HealthSnapshotType:
-        # В TERM-1 HealthSnapshot живёт in-memory.
-        if self._fsm is not None:
-            try:
-                self._snapshot["state"] = self._fsm.get_state()
-            except Exception:
-                self._snapshot["state"] = StateEnum.ERROR
-        self._snapshot["ts_ms"] = self._now_ms()
-        return dict(self._snapshot)
+    def get_snapshot(self) -> HealthSnapshotType:
+        return self._snapshot

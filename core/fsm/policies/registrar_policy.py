@@ -6,7 +6,7 @@ from typing import Optional, Sequence
 
 from core._base import BasePolicy
 from core._entities import StateEnum
-from core._interfaces import IConfigs, IRegistrar
+from core._interfaces import IConfigs, IMarkers, IRegistrar
 
 
 @dataclass(frozen=True, slots=True)
@@ -31,11 +31,22 @@ class RegistrarPolicy(BasePolicy):
         - если check_id неизвестен (404) -> считает регистрацию потерянной и инициирует re-register
     """
 
-    def __init__(self, *, cfg: IConfigs, registrar: IRegistrar, spec: RegistrarSpec) -> None:
+    def __init__(
+        self,
+        *,
+        cfg: IConfigs,
+        registrar: IRegistrar,
+        spec: RegistrarSpec,
+        markers: IMarkers | None = None,
+        ready_marker: str | None = None,
+    ) -> None:
         super().__init__("RegistrarPolicy")
         self._cfg = cfg
         self._registrar = registrar
         self._spec = spec
+
+        self._markers = markers
+        self._ready_marker = (ready_marker or f"{spec.service}_ready") if markers is not None else None
 
         self._check_id = spec.check_id or f"service:{spec.service}:ttl"
 
@@ -139,7 +150,12 @@ class RegistrarPolicy(BasePolicy):
                 self._last_heartbeat_mon = now
                 self._next_heartbeat_mon = now + float(heartbeat_period)
                 self._register_fail_streak = 0
-                return self.ok(details={"registered": True, "check_id": self._check_id, "ttl_sec": ttl_sec})
+                if self._markers is not None and self._ready_marker is not None:
+                    try:
+                        self._markers.set(self._ready_marker)
+                    except Exception:
+                        pass
+                return self.ok(details={"registered": True, "check_id": self._check_id, "ttl_sec": ttl_sec, "ready_marker": self._ready_marker})
 
             except RuntimeError as e:
                 reason = str(e)
@@ -175,7 +191,12 @@ class RegistrarPolicy(BasePolicy):
                     self._last_heartbeat_mon = now
                     self._next_heartbeat_mon = now + float(heartbeat_period)
                     self._register_fail_streak = 0
-                    return self.ok(details={"registered": True, "check_id": self._check_id, "ttl_sec": ttl_sec})
+                    if self._markers is not None and self._ready_marker is not None:
+                        try:
+                            self._markers.set(self._ready_marker)
+                        except Exception:
+                            pass
+                    return self.ok(details={"registered": True, "check_id": self._check_id, "ttl_sec": ttl_sec, "ready_marker": self._ready_marker})
 
                 except RuntimeError as e:
                     reason = str(e)
@@ -193,40 +214,34 @@ class RegistrarPolicy(BasePolicy):
 
             # 2) heartbeat with backoff (NO RETRY)
             if self._next_heartbeat_mon and now < self._next_heartbeat_mon:
-                return self.ok(details={"heartbeat": False, "reason": "throttle", "check_id": self._check_id})
-
-            if self._last_heartbeat_mon and (now - self._last_heartbeat_mon) < float(heartbeat_period):
-                self._next_heartbeat_mon = self._last_heartbeat_mon + float(heartbeat_period)
-                return self.ok(details={"heartbeat": False, "reason": "throttle", "check_id": self._check_id})
+                return self.ok(details={"registered": True, "reason": "heartbeat_wait", "check_id": self._check_id, "wait_s": round(self._next_heartbeat_mon - now, 3)})
 
             try:
                 self._heartbeat_once()
                 self._last_heartbeat_mon = now
                 self._next_heartbeat_mon = now + float(heartbeat_period)
                 self._heartbeat_fail_streak = 0
-                return self.ok(details={"heartbeat": True, "check_id": self._check_id})
+                return self.ok(details={"registered": True, "heartbeat": "ok", "check_id": self._check_id})
 
             except RuntimeError as e:
                 reason = str(e)
 
-                # lost check -> re-register
+                # if check disappeared -> force re-register soon
                 if self._is_unknown_check(reason):
                     self._registered = False
-                    self._heartbeat_fail_streak = 0
-                    self._register_fail_streak = 0
-                    self._next_register_mon = now + 1.0
-                    return self.ok(details={"heartbeat": False, "reason": reason, "action": "reregister", "check_id": self._check_id})
+                    self._next_register_mon = now + 0.2
+                    return self.ok(details={"registered": False, "reason": reason, "check_id": self._check_id, "action": "reregister"})
 
                 extra = 2.0 if self._is_acl_not_ready(reason) else 0.0
                 self._heartbeat_fail_streak += 1
                 backoff = self._backoff_sec(self._heartbeat_fail_streak, base=hb_backoff_base, cap=hb_backoff_cap) + extra
                 self._next_heartbeat_mon = now + backoff
-                return self.ok(details={"heartbeat": False, "reason": reason, "check_id": self._check_id, "backoff_s": round(backoff, 3)})
+                return self.ok(details={"registered": True, "heartbeat": "fail", "reason": reason, "check_id": self._check_id, "backoff_s": round(backoff, 3)})
 
             except Exception as e:
                 self._heartbeat_fail_streak += 1
                 backoff = self._backoff_sec(self._heartbeat_fail_streak, base=hb_backoff_base, cap=hb_backoff_cap)
                 self._next_heartbeat_mon = now + backoff
-                return self.ok(details={"heartbeat": False, "reason": f"registrar_error:{type(e).__name__}", "check_id": self._check_id, "backoff_s": round(backoff, 3), "exc": str(e)[:256]})
+                return self.ok(details={"registered": True, "heartbeat": "fail", "reason": f"registrar_error:{type(e).__name__}", "check_id": self._check_id, "backoff_s": round(backoff, 3), "exc": str(e)[:256]})
 
         return self.ok(details={"skip": True})
