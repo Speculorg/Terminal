@@ -1,9 +1,8 @@
 # services/traefik/config/traefik.yml
-# TERM-1: single static config for Traefik (HTTPS mode).
-# - No generated configs.
-# - Providers: Consul Catalog (exposedByDefault=false) + file provider for shared TLS options/transports.
-# - web (:8080) is INTERNAL ONLY (not published to host), used only for redirect/ping.
-# - websecure (:8443) is published to host.
+# TERM-1: single static config for Traefik.
+# Providers: Consul Catalog only (tags-driven), exposedByDefault=false.
+# NOTE: web (:8080) should be INTERNAL only (not published to host).
+# websecure (:8443) is published to host.
 
 global:
   checkNewVersion: false
@@ -48,7 +47,3 @@ providers:
     exposedByDefault: false
     prefix: "traefik"
     refreshInterval: "15s"
-
-  file:
-    filename: "/config/dynamic_https.yml"
-    watch: true
