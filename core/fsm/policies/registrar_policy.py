@@ -74,7 +74,7 @@ class RegistrarPolicy(BasePolicy):
 
     @staticmethod
     def _backoff_sec(streak: int, *, base: float, cap: float) -> float:
-        v = base * (1.7 ** max(0, streak))
+        v = base * (2 ** max(0, streak))
         return cap if v > cap else v
 
     @staticmethod
@@ -107,16 +107,16 @@ class RegistrarPolicy(BasePolicy):
         if ttl_sec is None:
             ttl_sec = self._cfg_int("REGISTRAR_TTL_SEC", 15)
 
-        heartbeat_period = self._cfg_int("REGISTRAR_HEARTBEAT_PERIOD_SEC", 7)
-        cooldown = self._cfg_int("REGISTRAR_REREGISTRATION_COOLDOWN_SEC", 15)
-        window_sec = max(1, self._cfg_int("REGISTRAR_DEREGISTER_CRITICAL_SERVICE_AFTER_SEC", 45))
+        heartbeat_period = self._cfg_int("REGISTRAR_HEARTBEAT_PERIOD_SEC", 20)
+        cooldown = self._cfg_int("REGISTRAR_REREGISTRATION_COOLDOWN_SEC", 30)
+        window_sec = max(1, self._cfg_int("REGISTRAR_DEREGISTER_CRITICAL_SERVICE_AFTER_SEC", 240))
         max_attempts = max(1, self._cfg_int("REGISTRAR_MAX_REREG_ATTEMPTS_PER_WINDOW", 5))
 
         # backoff tuning (не делаем обязательными: берём defaults)
-        reg_backoff_base = float(self._cfg_int("REGISTRAR_BACKOFF_BASE_SEC", 1))
-        reg_backoff_cap = float(self._cfg_int("REGISTRAR_BACKOFF_CAP_SEC", 30))
-        hb_backoff_base = float(self._cfg_int("REGISTRAR_HEARTBEAT_BACKOFF_BASE_SEC", 2))
-        hb_backoff_cap = float(self._cfg_int("REGISTRAR_HEARTBEAT_BACKOFF_CAP_SEC", 30))
+        reg_backoff_base = float(self._cfg_int("REGISTRAR_BACKOFF_BASE_SEC", 5))
+        reg_backoff_cap = float(self._cfg_int("REGISTRAR_BACKOFF_CAP_SEC", 120))
+        hb_backoff_base = float(self._cfg_int("REGISTRAR_HEARTBEAT_BACKOFF_BASE_SEC", 5))
+        hb_backoff_cap = float(self._cfg_int("REGISTRAR_HEARTBEAT_BACKOFF_CAP_SEC", 120))
 
         # ---------------- REGISTERING (blocking) ----------------
         if state == StateEnum.REGISTERING:
