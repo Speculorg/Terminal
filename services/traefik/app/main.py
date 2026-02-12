@@ -18,7 +18,7 @@ class TraefikRunProfile(IRunProfile):
         # Старт демона блокируем по маркерам: ждём токены Consul и первичные артефакты PKI от Vault.
         return {
             StateEnum.BOOTSTRAPPING.value: ("vault_initial_pem", "consul_tokens"),
-            StateEnum.SECURING.value: ("vault_initial_pem", "consul_tokens"),
+            StateEnum.SECURING.value: ("vault_initial_pem", "consul_tokens", "consul_ready"),
             # регистрация только после готовности токенов Consul и готовности самого Consul
             StateEnum.REGISTERING.value: ("consul_tokens", "consul_ready"),
         }

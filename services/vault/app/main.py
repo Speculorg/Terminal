@@ -19,7 +19,7 @@ class VaultRunProfile(IRunProfile):
         return {
             StateEnum.INITIALIZING.value: ("vault_init", "vault_initial_pem"),
             StateEnum.BOOTSTRAPPING.value: ("consul_tokens",),
-            StateEnum.SECURING.value: ("vault_init", "vault_initial_pem"),
+            StateEnum.SECURING.value: ("vault_init", "vault_initial_pem", "consul_ready"),
             # регистрация только после готовности токенов Consul и готовности самого Consul
             StateEnum.REGISTERING.value: ("consul_tokens", "consul_ready"),
         }
