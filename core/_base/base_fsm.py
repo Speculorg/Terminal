@@ -161,6 +161,7 @@ class BaseFSM(IFSM):
                     try:
                         self._log.event(
                             EventCodeEnum.POLICY_RUN_OK,
+                            level="INFO",
                             fields={"svc": self._svc, "state": state.value, "policy": p.name, "details": details},
                         )
                     except Exception:
@@ -171,6 +172,7 @@ class BaseFSM(IFSM):
                 try:
                     self._log.event(
                         EventCodeEnum.POLICY_RUN_RETRY,
+                        level="DEBUG",
                         fields={"svc": self._svc, "state": state.value, "policy": p.name, "details": details},
                     )
                 except Exception:

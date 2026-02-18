@@ -1,55 +1,50 @@
 from __future__ import annotations
+
 import socket
 import time
-from typing import Optional
+from typing import Any, Mapping, Optional
+
 import requests
 
 from core._interfaces import INet
 
-
 class BaseNet(INet):
     """
-    Базовый фасад сетевых проверок/ожиданий.
+    BaseNet — минимальный набор сетевых утилит TERM-1.
 
-    Принцип:
-    - tcp_check: одиночная попытка
-    - tcp_wait: попытки до timeout_ms (с небольшим sleep)
+    Принципы:
+    - без исключений наружу: ошибки нормализуются в (0, "request_error:...")
+    - один общий приватный _get(); публичные http_get/https_get — тонкие врапперы
     """
 
     def tcp_check(self, host: str, port: int, *, timeout_ms: int) -> bool:
-        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         try:
-            s.settimeout(max(0.001, timeout_ms / 1000.0))
-            return s.connect_ex((host, port)) == 0
+            with socket.create_connection((host, int(port)), timeout=max(0.001, timeout_ms / 1000.0)):
+                return True
         except Exception:
             return False
-        finally:
-            try:
-                s.close()
-            except Exception:
-                pass
 
     def tcp_wait(self, host: str, port: int, *, timeout_ms: int) -> bool:
-        deadline = time.monotonic() + max(0, timeout_ms) / 1000.0
-        while time.monotonic() <= deadline:
-            if self.tcp_check(host, port, timeout_ms=min(250, timeout_ms)):
+        deadline = time.time() + max(0.0, timeout_ms / 1000.0)
+        while time.time() < deadline:
+            if self.tcp_check(host, port, timeout_ms=250):
                 return True
-            time.sleep(0.1)
+            time.sleep(0.05)
         return False
 
-    def http_get(
+    def _get(
         self,
         url: str,
         *,
         timeout_ms: int,
+        headers: Optional[Mapping[str, str]] = None,
         verify_tls: bool = True,
         ca_file: Optional[str] = None,
         client_cert_file: Optional[str] = None,
         client_key_file: Optional[str] = None,
     ) -> tuple[int, str]:
-        timeout_s = max(0.001, timeout_ms / 1000.0)
-
-        verify: bool | str
+        """Общий HTTP(S) GET, нормализует ошибки."""
+        verify: Any
         if not verify_tls:
             verify = False
         elif ca_file:
@@ -57,16 +52,51 @@ class BaseNet(INet):
         else:
             verify = True
 
-        cert = None
+        cert: Any = None
         if client_cert_file and client_key_file:
             cert = (client_cert_file, client_key_file)
         elif client_cert_file:
             cert = client_cert_file
 
         try:
-            r = requests.get(url, timeout=timeout_s, verify=verify, cert=cert)
-            body = (r.text or "")[:2048]
-            return int(r.status_code), body
-        except requests.RequestException as e:
-            # Нормализуем сетевые ошибки в единый ответ
-            return 0, f"request_error:{type(e).__name__}"
+            r = requests.get(
+                url,
+                headers=dict(headers or {}),
+                timeout=max(0.001, timeout_ms / 1000.0),
+                verify=verify,
+                cert=cert,
+            )
+            body = (r.text or "")
+            return int(r.status_code), body[:512]
+        except Exception as e:
+            return 0, f"request_error:{type(e).__name__}:{str(e)[:256]}"
+
+    def http_get(
+        self,
+        url: str,
+        *,
+        timeout_ms: int,
+        headers: Optional[Mapping[str, str]] = None,
+    ) -> tuple[int, str]:
+        return self._get(url, timeout_ms=timeout_ms, headers=headers, verify_tls=False)
+
+    def https_get(
+        self,
+        url: str,
+        *,
+        timeout_ms: int,
+        headers: Optional[Mapping[str, str]] = None,
+        verify_tls: bool = True,
+        ca_file: Optional[str] = None,
+        client_cert_file: Optional[str] = None,
+        client_key_file: Optional[str] = None,
+    ) -> tuple[int, str]:
+        return self._get(
+            url,
+            timeout_ms=timeout_ms,
+            headers=headers,
+            verify_tls=verify_tls,
+            ca_file=ca_file,
+            client_cert_file=client_cert_file,
+            client_key_file=client_key_file,
+        )

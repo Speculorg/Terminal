@@ -193,6 +193,8 @@ class BaseService(IService):
                 cfg=deps.cfg,
                 registrar=deps.registrar,
                 markers=deps.markers,
+                net=deps.net,
+                log=deps.log,
                 spec=RegistrarSpec(
                     service=svc_name,
                     address=address,
