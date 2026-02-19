@@ -22,6 +22,7 @@ storage "consul" {
   address = "consul:8501"
   scheme  = "https"
   path    = "vault/"
+  disable_registration = "true"
 
   tls_ca_file   = "/fs/terminal/certs/ca.crt"
   tls_cert_file = "/fs/terminal/certs/vault.crt"

@@ -60,7 +60,7 @@ def _req_json(
     payload: dict[str, Any] | None = None,
     ok: tuple[int, ...] = (200,),
     timeout_s: float = 6.0,
-) -> dict[str, Any]:
+) -> Any:
     st, text = _req(method, url, token=token, payload=payload, timeout_s=timeout_s)
     if st not in ok:
         raise RuntimeError(f"consul_http_error:{st}:{text[:256]}")
@@ -195,11 +195,31 @@ def consul_bootstrap(*, cfg: IConfigs, fs: IFS, markers: IMarkers, log: Optional
         },
     }
 
-    def _policy_upsert(name: str, desc: str, rules: str) -> None:
-        url_by_name = f"{base}/v1/acl/policy/name/{name}"
-        st, _ = _req("GET", url_by_name, token=root_token, timeout_s=6.0)
+    # --- policies (без 404 в логах Consul) ---
+    items = _req_json("GET", f"{base}/v1/acl/policies", token=root_token, ok=(200,), timeout_s=10.0)
+    if not isinstance(items, list):
+        raise RuntimeError("consul_bootstrap:policy_list_unexpected")
 
-        if st == 404:
+    name_to_id: dict[str, str] = {}
+    for it in items:
+        if not isinstance(it, dict):
+            continue
+        n = str(it.get("Name", "") or "").strip()
+        pid = str(it.get("ID", "") or "").strip()
+        if n and pid:
+            name_to_id[n] = pid
+
+    def _policy_upsert(name: str, desc: str, rules: str) -> None:
+        """
+        Upsert ACL policy без GET /v1/acl/policy/name/:name (чтобы не получать 404->[ERROR] в лог Consul).
+
+        Алгоритм:
+        - если ID найден в name_to_id: читаем GET /v1/acl/policy/:id (200), сравниваем, при необходимости PUT /v1/acl/policy/:id
+        - иначе: PUT /v1/acl/policy (create)
+        """
+        pid = name_to_id.get(name)
+
+        if not pid:
             _log("consul_bootstrap:policy:create", name=name)
             _req_json(
                 "PUT",
@@ -211,24 +231,24 @@ def consul_bootstrap(*, cfg: IConfigs, fs: IFS, markers: IMarkers, log: Optional
             )
             return
 
-        if st == 200:
-            p = _req_json("GET", url_by_name, token=root_token, ok=(200,), timeout_s=6.0)
-            pid = str(p.get("ID", "")).strip()
-            if not pid:
-                raise RuntimeError(f"consul_policy_missing_id:{name}")
+        p = _req_json("GET", f"{base}/v1/acl/policy/{pid}", token=root_token, ok=(200,), timeout_s=6.0)
+        if not isinstance(p, dict):
+            raise RuntimeError(f"consul_policy_read_unexpected:{name}")
 
-            _log("consul_bootstrap:policy:update", name=name, id=pid)
-            _req_json(
-                "PUT",
-                f"{base}/v1/acl/policy/{pid}",
-                token=root_token,
-                payload={"Name": name, "Description": desc, "Rules": rules},
-                ok=(200,),
-                timeout_s=10.0,
-            )
+        if str(p.get("Description", "") or "") == desc and str(p.get("Rules", "") or "") == rules:
+            _log("consul_bootstrap:policy:skip", name=name, id=pid)
             return
 
-        raise RuntimeError(f"consul_policy_unexpected_status:{name}:{st}")
+        _log("consul_bootstrap:policy:update", name=name, id=pid)
+        _req_json(
+            "PUT",
+            f"{base}/v1/acl/policy/{pid}",
+            token=root_token,
+            payload={"ID": pid, "Name": name, "Description": desc, "Rules": rules},
+            ok=(200,),
+            timeout_s=10.0,
+        )
+        return
 
     for pname, meta in policies.items():
         _policy_upsert(pname, meta["Description"], meta["Rules"])
