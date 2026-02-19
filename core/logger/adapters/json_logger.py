@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 import time
 from typing import Any, Mapping, Optional
 
-from core._base import BaseLogger
 from core._entities import EventCodeEnum, LogLevelEnum
+from core._interfaces import ILogger
 
 
 def _now_ms() -> int:
@@ -14,10 +15,6 @@ def _now_ms() -> int:
 
 
 def _to_jsonable(value: Any) -> Any:
-    """
-    Безопасная нормализация значений для JSON.
-
-    """
     if value is None:
         return None
     if isinstance(value, (str, int, float, bool)):
@@ -35,35 +32,36 @@ def _to_jsonable(value: Any) -> Any:
 
 
 def _level_rank(level: str) -> int:
-    m = {
-        "DEBUG": 10,
-        "INFO": 20,
-        "WARN": 30,
-        "WARNING": 30,
-        "ERROR": 40,
-    }
-    return m.get(level.upper(), 20)
+    m = {"DEBUG": 10, "INFO": 20, "WARN": 30, "WARNING": 30, "ERROR": 40}
+    return m.get((level or "").upper(), 20)
 
 
-class JsonLogger(BaseLogger):
-    """
-    Structured JSON logger to stdout.
+def _norm_level(level: LogLevelEnum | str) -> str:
+    if isinstance(level, LogLevelEnum):
+        return str(level.value)
+    if isinstance(level, str):
+        return level
+    v = getattr(level, "value", None)
+    if isinstance(v, str):
+        return v
+    return str(level)
 
-    Формат записи:
-    {
-      "ts_ms": 123,
-      "svc": "svc-name",
-      "level": "INFO",
-      "code": "deps.build.ok",
-      "msg": "...",
-      "fields": {...}
-    }
-    
-    """
 
-    def __init__(self, *, service: str, level: str = "INFO") -> None:
-        self._svc = service
-        self._min_level = level.upper()
+def _norm_code(code: EventCodeEnum | str) -> str:
+    if isinstance(code, EventCodeEnum):
+        return str(code.value)
+    if isinstance(code, str):
+        return code
+    v = getattr(code, "value", None)
+    if isinstance(v, str):
+        return v
+    return str(code)
+
+
+class JsonLogger(ILogger):
+    def __init__(self, *, service: Optional[str] = None, level: str = "INFO") -> None:
+        self._svc = service or os.getenv("SERVICE_NAME", "unknown")
+        self._min_level = (level or "INFO").upper()
 
     def event(
         self,
@@ -74,15 +72,15 @@ class JsonLogger(BaseLogger):
         fields: Optional[Mapping[str, Any]] = None,
     ) -> None:
         try:
-            lvl = str(level).upper()
+            lvl = _norm_level(level).upper()
             if _level_rank(lvl) < _level_rank(self._min_level):
                 return
 
-            rec = {
+            rec: dict[str, Any] = {
                 "ts_ms": _now_ms(),
                 "svc": self._svc,
                 "level": lvl,
-                "code": str(code),
+                "code": _norm_code(code),
             }
             if message:
                 rec["msg"] = str(message)
@@ -92,9 +90,21 @@ class JsonLogger(BaseLogger):
             sys.stdout.write(json.dumps(rec, ensure_ascii=False) + "\n")
             sys.stdout.flush()
         except Exception:
-            # Логгер не должен валить процесс ни при каких условиях.
+            # Логгер никогда не должен валить процесс
             try:
                 sys.stdout.write('{"level":"ERROR","code":"logger.fail"}\n')
                 sys.stdout.flush()
             except Exception:
                 pass
+
+    def debug(self, message: str, *, fields: Optional[Mapping[str, Any]] = None) -> None:
+        self.event("log.debug", level=LogLevelEnum.DEBUG, message=message, fields=fields)
+
+    def info(self, message: str, *, fields: Optional[Mapping[str, Any]] = None) -> None:
+        self.event("log.info", level=LogLevelEnum.INFO, message=message, fields=fields)
+
+    def warn(self, message: str, *, fields: Optional[Mapping[str, Any]] = None) -> None:
+        self.event("log.warn", level=LogLevelEnum.WARN, message=message, fields=fields)
+
+    def error(self, message: str, *, fields: Optional[Mapping[str, Any]] = None) -> None:
+        self.event("log.error", level=LogLevelEnum.ERROR, message=message, fields=fields)

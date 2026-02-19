@@ -33,7 +33,29 @@ def _to_jsonable(value: Any) -> Any:
 
 def _level_rank(level: str) -> int:
     m = {"DEBUG": 10, "INFO": 20, "WARN": 30, "WARNING": 30, "ERROR": 40}
-    return m.get(level.upper(), 20)
+    return m.get((level or "").upper(), 20)
+
+
+def _norm_level(level: LogLevelEnum | str) -> str:
+    if isinstance(level, LogLevelEnum):
+        return str(level.value)
+    if isinstance(level, str):
+        return level
+    v = getattr(level, "value", None)
+    if isinstance(v, str):
+        return v
+    return str(level)
+
+
+def _norm_code(code: EventCodeEnum | str) -> str:
+    if isinstance(code, EventCodeEnum):
+        return str(code.value)
+    if isinstance(code, str):
+        return code
+    v = getattr(code, "value", None)
+    if isinstance(v, str):
+        return v
+    return str(code)
 
 
 class BaseLogger(ILogger):
@@ -59,7 +81,7 @@ class BaseLogger(ILogger):
         fields: Optional[Mapping[str, Any]] = None,
     ) -> None:
         try:
-            lvl = str(level).upper()
+            lvl = _norm_level(level).upper()
             if _level_rank(lvl) < _level_rank(self._min_level):
                 return
 
@@ -67,7 +89,7 @@ class BaseLogger(ILogger):
                 "ts_ms": _now_ms(),
                 "svc": self._svc,
                 "level": lvl,
-                "code": str(code),
+                "code": _norm_code(code),
             }
             if message:
                 rec["msg"] = str(message)
