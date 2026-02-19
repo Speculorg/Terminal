@@ -7,7 +7,7 @@
 datacenter = "dc-1"
 node_name = "node-1"
 server = true
-bootstrap_expect = 1
+# Bootstrap mode is only used in HTTP bootstrap config; HTTPS mode relies on persisted Raft state.
 data_dir = "/consul/data"
 disable_update_check = true
 
@@ -29,15 +29,25 @@ ports {
   grpc = -1
   grpc_tls = 8503
 
+  serf_lan = 8301
+  serf_wan = -1
+
+  server = 8300
   dns = 8600
 }
 
+# ACL is enabled; clients MUST pass their token.
 acl {
   enabled = true
   default_policy = "deny"
   enable_token_persistence = true
+
 }
 
+# Encrypt gossip in LAN (single node still uses it).
+encrypt = "kbhvFR8n4u7u1R0oK8fV0Q=="
+
+# TLS settings: HTTPS+mTLS.
 tls {
   defaults {
     ca_file = "/fs/terminal/certs/ca.crt"
@@ -56,4 +66,3 @@ tls {
     verify_incoming = true
   }
 }
-
