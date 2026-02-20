@@ -9,6 +9,16 @@ from core._interfaces import IConfigs, ILogger
 from core.logger.adapters.json_logger import JsonLogger
 
 
+def _clean_level(raw: str) -> str:
+    s = (raw or "").strip()
+    if len(s) >= 2 and ((s[0] == s[-1] == '"') or (s[0] == s[-1] == "'")):
+        s = s[1:-1].strip()
+    s = s.upper()
+    if s in ("DEBUG", "INFO", "WARN", "WARNING", "ERROR"):
+        return "WARN" if s == "WARNING" else s
+    return "INFO"
+
+
 class Logger(BaseLogger):
     """
     Logger — фасад логирования Core.
@@ -23,10 +33,21 @@ class Logger(BaseLogger):
     @classmethod
     def from_configs(cls, *, cfg: IConfigs) -> "Logger":
         # TERM-1: минимальная маршрутизация по env/секциям
-        level = str(cfg.get("LOGGING_LEVEL", "INFO"))
+        raw_level = str(cfg.get("LOGGING_LEVEL", "INFO"))
+        level = _clean_level(raw_level)
         service = str(getattr(cfg, "service_name", "unknown"))
+
         impl = JsonLogger(service=service, level=level)
-        return cls(impl=impl)
+        log = cls(impl=impl)
+
+        # Однократная диагностика: что реально применилось.
+        # Помогает ловить случаи, когда env перекрыт или пришёл "кривым".
+        log.event(
+            "logging.level",
+            level="INFO",
+            fields={"svc": service, "raw": raw_level, "effective": level},
+        )
+        return log
 
     def event(
         self,

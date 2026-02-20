@@ -31,9 +31,19 @@ def _to_jsonable(value: Any) -> Any:
         return "<unprintable>"
 
 
+def _clean_level(raw: str) -> str:
+    s = (raw or "").strip()
+    if len(s) >= 2 and ((s[0] == s[-1] == '"') or (s[0] == s[-1] == "'")):
+        s = s[1:-1].strip()
+    s = s.upper()
+    if s in ("DEBUG", "INFO", "WARN", "WARNING", "ERROR"):
+        return "WARN" if s == "WARNING" else s
+    return "INFO"
+
+
 def _level_rank(level: str) -> int:
-    m = {"DEBUG": 10, "INFO": 20, "WARN": 30, "WARNING": 30, "ERROR": 40}
-    return m.get((level or "").upper(), 20)
+    m = {"DEBUG": 10, "INFO": 20, "WARN": 30, "ERROR": 40}
+    return m.get(_clean_level(level), 20)
 
 
 def _norm_level(level: LogLevelEnum | str) -> str:
@@ -61,7 +71,7 @@ def _norm_code(code: EventCodeEnum | str) -> str:
 class JsonLogger(ILogger):
     def __init__(self, *, service: Optional[str] = None, level: str = "INFO") -> None:
         self._svc = service or os.getenv("SERVICE_NAME", "unknown")
-        self._min_level = (level or "INFO").upper()
+        self._min_level = _clean_level(level or "INFO")
 
     def event(
         self,
@@ -72,7 +82,7 @@ class JsonLogger(ILogger):
         fields: Optional[Mapping[str, Any]] = None,
     ) -> None:
         try:
-            lvl = _norm_level(level).upper()
+            lvl = _clean_level(_norm_level(level))
             if _level_rank(lvl) < _level_rank(self._min_level):
                 return
 
