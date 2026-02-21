@@ -17,12 +17,6 @@ class FSM(BaseFSM):
     """
     Реализация IFSM (TERM-1).
 
-    Цели:
-    - фиксированный порядок состояний
-    - фиксированная матрица state -> policies
-    - минимальная наблюдаемость (HealthSnapshot in-memory)
-    - минимальные команды управления: pause/resume/restart/stop
-
     Важно:
     - stage_gates проверяются MarkerPolicy, но не FSM.
     - FSM не пересобирает Deps и не знает про конкретные сервисы.
@@ -61,15 +55,6 @@ class FSM(BaseFSM):
     # --- main loop ---
 
     def run(self) -> None:
-        """
-        Главный цикл FSM.
-
-        Семантика:
-        - В bootstrap-части: retry-forever (если политика даёт RETRY)
-        - На FAIL: ERROR и останов (fail-fast)
-        - RUNNING: циклический тик, политики должны быть быстрыми
-        - restart(): сбрасывает флаг и повторяет проход с INITIALIZING
-        """
         try:
             while True:
                 if self._stop:
@@ -80,7 +65,6 @@ class FSM(BaseFSM):
 
                 if self._restart:
                     self._restart = False
-                    # минимальный “сброс”: возвращаемся к INITIALIZING (deps остаются теми же)
                     self.transition(StateEnum.INITIALIZING)
 
                 st = self.get_state()
@@ -88,7 +72,6 @@ class FSM(BaseFSM):
                     time.sleep(self._retry_sleep_s(StateEnum.PAUSED))
                     continue
 
-                # если state не из ORDER (например ERROR/DEGRADED), удерживаем
                 if st not in self.ORDER:
                     time.sleep(self._retry_sleep_s(st))
                     continue
@@ -102,12 +85,10 @@ class FSM(BaseFSM):
                     self.publish_state(details={"error_code": ErrorCodeEnum.ERR_UNEXPECTED})
                     return
 
-                # RUNNING — остаёмся в RUNNING и тикаем, а не продвигаемся дальше
                 if st == StateEnum.RUNNING:
                     time.sleep(self._running_tick_s())
                     continue
 
-                # продвигаемся к следующему состоянию
                 nxt = self._next_state(st)
                 self.transition(nxt)
 
@@ -136,10 +117,6 @@ class FSM(BaseFSM):
             return StateEnum.ERROR
 
     def _state_deadline_ms(self, st: StateEnum) -> int:
-        """
-        Дедлайны берём через cfg.get для совместимости с текущими env-ключами.
-        0 означает “без дедлайна”.
-        """
         key_map = {
             StateEnum.INITIALIZING: "FSM_STATE_INITIALIZING_TIMEOUT_MS",
             StateEnum.BOOTSTRAPPING: "FSM_STATE_BOOTSTRAPPING_TIMEOUT_MS",
@@ -163,14 +140,6 @@ class FSM(BaseFSM):
             return 1.0
 
     def _retry_sleep_s(self, st: StateEnum) -> float:
-        """
-        Backoff для RETRY/ожиданий, чтобы не засорять логи.
-
-        Ключи конфигурации:
-        - FSM_RETRY_SLEEP_MS (дефолт 1000)
-        - FSM_RETRY_SLEEP_<STATE>_MS (например FSM_RETRY_SLEEP_REGISTERING_MS)
-        """
-        # per-state override
         key = f"FSM_RETRY_SLEEP_{st.value}_MS"
         try:
             v = self._cfg.get(key, None)
@@ -180,21 +149,46 @@ class FSM(BaseFSM):
         except Exception:
             pass
 
-        # global default
         try:
             ms = int(self._cfg.get("FSM_RETRY_SLEEP_MS", 1000) or 1000)
             return max(0.05, ms / 1000.0)
         except Exception:
-            return 1
+            return 1.0
+
+    @staticmethod
+    def _sleep_hint_s(details: dict[str, object]) -> float:
+        """
+        Подсказка сна от политики.
+
+        Важно:
+        - BasePolicy.retry() кладёт пользовательские поля в details["meta"].
+        - Поэтому ищем wait_s/backoff_s и на верхнем уровне, и внутри meta.
+        """
+        def _extract(d: dict[str, object]) -> float:
+            for k in ("wait_s", "backoff_s"):
+                v = d.get(k, None)
+                if isinstance(v, (int, float)) and v > 0:
+                    return float(v)
+                if isinstance(v, str):
+                    try:
+                        x = float(v)
+                        if x > 0:
+                            return x
+                    except Exception:
+                        pass
+            return 0.0
+
+        h = _extract(details)
+        if h > 0:
+            return h
+
+        meta = details.get("meta", None)
+        if isinstance(meta, dict):
+            return _extract(meta)
+
+        return 0.0
 
     def _tick_state(self, st: StateEnum) -> bool:
-        """
-        Выполнение одного состояния.
-
-        Порядок:
-        1) policies: OK/RETRY/FAIL
-        2) deadline: если вышли за deadline -> FAIL
-        """
         enter_ms = self._now_ms()
         deadline_ms = self._state_deadline_ms(st)
 
@@ -203,14 +197,14 @@ class FSM(BaseFSM):
                 return True
 
             if self._restart and st != StateEnum.RUNNING:
-                # даём быстрый выход из текущего состояния для рестарта
                 return True
 
             if self.get_state() == StateEnum.PAUSED:
                 time.sleep(self._retry_sleep_s(StateEnum.PAUSED))
                 continue
 
-            status = self.run_policies(st)
+            status, details, _policy = self.run_policies(st)
+
             if status == PolicyStatusEnum.OK:
                 return True
             if status == PolicyStatusEnum.FAIL:
@@ -221,4 +215,8 @@ class FSM(BaseFSM):
                 self.publish_state(details={"deadline_ms": deadline_ms, "state": st.value})
                 return False
 
-            time.sleep(self._retry_sleep_s(st))
+            base_sleep = self._retry_sleep_s(st)
+            hint = self._sleep_hint_s(details)
+            sleep_s = max(base_sleep, min(hint, 30.0)) if hint > 0 else base_sleep
+
+            time.sleep(sleep_s)

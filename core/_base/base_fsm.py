@@ -297,14 +297,14 @@ class BaseFSM(IFSM):
 
     # --- policies runner ---
 
-    def run_policies(self, state: StateEnum) -> PolicyStatusEnum:
+    def run_policies(self, state: StateEnum) -> tuple[PolicyStatusEnum, dict[str, object], str]:
         """
         Выполнить политики состояния в фиксированном порядке.
 
-        Семантика:
-        - OK: продолжаем
-        - RETRY: прекращаем выполнение остальных политик и остаёмся в состоянии
-        - FAIL: прекращаем и считаем ошибкой
+        Возвращает:
+        - status
+        - details (из результата политики, если есть)
+        - policy_name (для RETRY/FAIL)
         """
         for p in self._policy_matrix.get(state, ()) or ():
             if self._verbose_policy_logs:
@@ -318,7 +318,7 @@ class BaseFSM(IFSM):
                     pass
 
             r = p.run(state=state)
-            status = r.get("status", PolicyStatusEnum.FAIL)
+            status = r.get("status", PolicyStatusEnum.FAIL) if isinstance(r, dict) else PolicyStatusEnum.FAIL
             details = r.get("details", {}) if isinstance(r, dict) else {}
             if not isinstance(details, dict):
                 details = {"details": details}
@@ -339,7 +339,7 @@ class BaseFSM(IFSM):
 
             if status == PolicyStatusEnum.RETRY:
                 self._on_retry(state=state, policy=p, details=details)
-                return PolicyStatusEnum.RETRY
+                return PolicyStatusEnum.RETRY, details, p.name
 
             # FAIL
             try:
@@ -350,6 +350,6 @@ class BaseFSM(IFSM):
                 )
             except Exception:
                 pass
-            return PolicyStatusEnum.FAIL
+            return PolicyStatusEnum.FAIL, details, p.name
 
-        return PolicyStatusEnum.OK
+        return PolicyStatusEnum.OK, {}, ""
