@@ -16,10 +16,6 @@ class ConsulRunProfile(IRunProfile):
 
     @property
     def stage_gates(self) -> Mapping[str, Sequence[str]]:
-        # INITIALIZING: вычисление RunMode. 
-        #   Если маркеры bootstrap уже есть -> NORMAL, иначе -> FIRST (HTTP bootstrap-окно).
-        # SECURING: Consul зависит от Vault PKI (CA + initial PEM), чтобы перейти в HTTPS.
-        # REGISTERING: токены ACL должны быть готовы, а TLS уже поднят.
         return {
             StateEnum.INITIALIZING.value: ("consul_bootstrap", "consul_tokens"),
             StateEnum.SECURING.value: ("vault_init", "vault_initial_pem"),
@@ -28,12 +24,39 @@ class ConsulRunProfile(IRunProfile):
 
     @property
     def start_cmd(self) -> Mapping[str, Sequence[str] | str | Any]:
+        # TERM-1: hot-reload TLS без рестарта процесса.
+        # Consul умеет перечитывать конфигурацию по SIGHUP (эквивалентно "consul reload"). :contentReference[oaicite:6]{index=6}
+        #
+        # Реализуем watcher прямо в start_cmd, чтобы ядро не знало про Consul и не рестартило процесс.
         return {
             "http": ("consul", "agent", "-config-file=/config/consul_http.hcl"),
-            "https": ("consul", "agent", "-config-file=/config/consul_https.hcl"),
+            "https": (
+                "sh",
+                "-ec",
+                "\n".join(
+                    (
+                        "CA=/fs/terminal/certs/ca.crt",
+                        "CERT=/fs/terminal/certs/consul.crt",
+                        "KEY=/fs/terminal/certs/consul.key",
+                        "consul agent -config-file=/config/consul_https.hcl &",
+                        "pid=$!",
+                        "trap 'kill -TERM \"$pid\" 2>/dev/null || true; wait \"$pid\" 2>/dev/null || true' TERM INT",
+                        "last=$( (sha256sum \"$CA\" \"$CERT\" \"$KEY\" 2>/dev/null || true) | sha256sum | awk '{print $1}')",
+                        "while kill -0 \"$pid\" 2>/dev/null; do",
+                        "  cur=$( (sha256sum \"$CA\" \"$CERT\" \"$KEY\" 2>/dev/null || true) | sha256sum | awk '{print $1}')",
+                        "  if [ -n \"$cur\" ] && [ \"$cur\" != \"$last\" ]; then",
+                        "    last=\"$cur\"",
+                        "    echo 'consul_tls_watch: changed -> HUP'",
+                        "    kill -HUP \"$pid\" 2>/dev/null || true",
+                        "  fi",
+                        "  sleep 1",
+                        "done",
+                        "wait \"$pid\"",
+                    )
+                ),
+            ),
         }
 
-    # Duck-typing hooks, используемые BaseService.build_fsm()
     bootstrap_done_markers = ("consul_bootstrap", "consul_tokens")
     bootstrap_fn = staticmethod(consul_bootstrap)
 

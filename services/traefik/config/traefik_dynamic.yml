@@ -1,0 +1,10 @@
+# services/traefik/config/traefik_dynamic.yml
+# TERM-1: Dynamic TLS configuration for Traefik.
+# Purpose: allow hot-reload of serving certificate without restarting Traefik. :contentReference[oaicite:9]{index=9}
+
+tls:
+  stores:
+    default:
+      defaultCertificate:
+        certFile: "/fs/terminal/certs/traefik.crt"
+        keyFile:  "/fs/terminal/certs/traefik.key"

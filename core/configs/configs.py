@@ -36,7 +36,6 @@ def _read_env_file(path: str) -> Dict[str, str]:
             k, v = line.split("=", 1)
             data[k.strip()] = v.strip()
     except Exception:
-        # configs.env не должен ломать запуск; ошибки проявятся позже через диагностику/логи
         return data
     return data
 
@@ -76,15 +75,6 @@ def _config_hash_by_sections(sections: Dict[str, Dict[str, str]]) -> str:
 
 
 class Configs(BaseConfigs):
-    """
-    Configs — фасад конфигурации (TERM-1).
-
-    Источники:
-    - configs.env
-    - переменные окружения (docker-compose)
-    - файлы (например CONSUL_HTTP_TOKEN_FILE) — читаем содержимое токена в model.context.consul_token
-    """
-
     def __init__(self, model: Model, raw_env: Mapping[str, str]) -> None:
         self._model = model
         self._raw_env = dict(raw_env)
@@ -95,11 +85,8 @@ class Configs(BaseConfigs):
         file_env = _read_env_file(env_path)
         merged = _merge_env(file_env)
 
-        global_ = GlobalSection(
-            domain_root=merged.get("GLOBAL_DOMAIN_ROOT", "terminal.local"),
-        )
+        global_ = GlobalSection(domain_root=merged.get("GLOBAL_DOMAIN_ROOT", "terminal.local"))
 
-        # token content (not path)
         consul_token = _read_text_file(merged.get("CONSUL_HTTP_TOKEN_FILE"))
 
         context = ContextSection(
@@ -121,9 +108,7 @@ class Configs(BaseConfigs):
             pki_role=merged.get("VAULT_PKI_ROLE", "terminal-leaf"),
         )
 
-        logging = LoggingSection(
-            level=merged.get("LOGGING_LEVEL", "INFO"),
-        )
+        logging = LoggingSection(level=merged.get("LOGGING_LEVEL", "INFO"))
 
         fs = FSSection(
             markers_dir=merged.get("FS_MARKERS_DIR", "/fs/terminal/markers"),
@@ -134,6 +119,11 @@ class Configs(BaseConfigs):
 
         tls = TLSSection(
             watch_poll_interval_ms=int(merged.get("TLS_WATCH_POLL_INTERVAL_MS", "500") or "500"),
+            rotate_check_interval_sec=int(merged.get("TLS_ROTATE_CHECK_INTERVAL_SEC", "30") or "30"),
+            rotate_after_sec=int(merged.get("TLS_ROTATE_AFTER_SEC", "300") or "300"),
+            rotate_ttl=str(merged.get("TLS_ROTATE_TTL", "10m") or "10m"),
+            rotate_vault_addr=str(merged.get("TLS_ROTATE_VAULT_ADDR", "https://vault:8200") or "https://vault:8200"),
+            rotate_vault_token_file=str(merged.get("TLS_ROTATE_VAULT_TOKEN_FILE", "/fs/terminal/secrets/vault_root_token.json") or "/fs/terminal/secrets/vault_root_token.json"),
         )
 
         fsm = FSMSection(
@@ -159,7 +149,14 @@ class Configs(BaseConfigs):
             "vault": {"http_port": str(vault.http_port), "pki_root_path": vault.pki_root_path, "pki_role": vault.pki_role},
             "logging": {"level": logging.level},
             "fs": {"markers_dir": fs.markers_dir, "certs_dir": fs.certs_dir, "secrets_dir": fs.secrets_dir, "tmp_dir": fs.tmp_dir},
-            "tls": {"watch_poll_interval_ms": str(tls.watch_poll_interval_ms)},
+            "tls": {
+                "watch_poll_interval_ms": str(tls.watch_poll_interval_ms),
+                "rotate_check_interval_sec": str(tls.rotate_check_interval_sec),
+                "rotate_after_sec": str(tls.rotate_after_sec),
+                "rotate_ttl": tls.rotate_ttl,
+                "rotate_vault_addr": tls.rotate_vault_addr,
+                "rotate_vault_token_file": tls.rotate_vault_token_file,
+            },
             "fsm": {
                 "state_bootstrapping_timeout_ms": str(fsm.state_bootstrapping_timeout_ms),
                 "state_initializing_timeout_ms": str(fsm.state_initializing_timeout_ms),
@@ -191,8 +188,6 @@ class Configs(BaseConfigs):
             config_hash=config_hash,
         )
         return cls(model=model, raw_env=merged)
-
-    # --- IConfigs ---
 
     def as_dict(self) -> Mapping[str, Any]:
         return self._model.model_dump()

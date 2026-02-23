@@ -1,6 +1,6 @@
 # services/traefik/config/traefik.yml
 # TERM-1: single static config for Traefik.
-# Providers: Consul Catalog only (tags-driven), exposedByDefault=false.
+# Providers: Consul Catalog + File (TLS stores/certs).
 # NOTE: web (:8080) should be INTERNAL only (not published to host).
 # websecure (:8443) is published to host.
 
@@ -34,6 +34,11 @@ entryPoints:
     address: ":8443"
 
 providers:
+  # TLS certificates/stores are only configurable via the File provider (dynamic config). :contentReference[oaicite:8]{index=8}
+  file:
+    filename: "/config/traefik_dynamic.yml"
+    watch: true
+
   consulCatalog:
     endpoint:
       scheme: https

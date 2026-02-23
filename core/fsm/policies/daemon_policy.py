@@ -31,12 +31,17 @@ class DaemonPolicy(BasePolicy):
     - SECURING: гарантируем HTTPS (после того как stage_gates разрешат вход в стадию).
     - RUNNING: supervise процесса:
         - если процесс умер — пробуем перезапустить (без рестарта контейнера)
-        - при изменении TLS bundle отправляем сигнал или делаем restart (внутри контейнера)
+        - при изменении TLS bundle отправляем сигнал (без рестарта процесса)
     - STOPPING: останавливаем процесс.
 
     Важно:
     - Мы НЕ валим контейнер при падении демона: вместо FAIL делаем RETRY (автосходимость).
     - Троттлинг рестартов задаётся DAEMON_RESTART_BACKOFF_MS (default 500ms).
+
+    TLS reload (TERM-1):
+    - Рестарт процесса для подхвата сертификатов запрещён (hot-reload).
+    - DaemonPolicy может отправить сигнал (если задан DAEMON_TLS_RELOAD_SIGNAL),
+      иначе только логирует "skip" и не предпринимает действий.
     """
 
     def __init__(
@@ -58,25 +63,20 @@ class DaemonPolicy(BasePolicy):
 
         https_cmd = list(start_cmd.get(DaemonMode.HTTPS.value, ()) or ())
         http_cmd = list(start_cmd.get(DaemonMode.HTTP.value, ()) or ())
-
-        if not https_cmd:
-            raise ValueError("run_profile.start_cmd must include non-empty 'https' command")
-
-        self._cmd_http: Optional[list[str]] = http_cmd if http_cmd else None
-        self._cmd_https: list[str] = https_cmd
+        self._cmd_https: Sequence[str] = tuple(str(x) for x in https_cmd)
+        self._cmd_http: Sequence[str] = tuple(str(x) for x in http_cmd)
 
         self._current_mode: Optional[DaemonMode] = None
 
         self._tls = tls
-        self._tls_bundle = list(tls_bundle or ())
-        self._tls_poll_ms = int(self._cfg.get("TLS_WATCH_POLL_INTERVAL_MS", 500) or 500)
-        self._tls_next_check_ms = 0
+        self._tls_bundle: Sequence[Path] = tuple(tls_bundle or ())
+        self._tls_poll_ms = int(cfg.get("TLS_WATCH_POLL_INTERVAL_MS", 500) or 500)
+        self._tls_next_check_ms: int = 0
         self._tls_last_fp: Optional[str] = None
 
-        self._reload_signal = self._parse_signal(str(self._cfg.get("DAEMON_TLS_RELOAD_SIGNAL", "") or ""))
+        self._reload_signal = self._parse_signal(cfg.get("DAEMON_TLS_RELOAD_SIGNAL", "") or "")
 
-        # throttle to avoid hot-loop restarts
-        self._restart_backoff_ms = int(self._cfg.get("DAEMON_RESTART_BACKOFF_MS", 500) or 500)
+        self._restart_backoff_ms = int(cfg.get("DAEMON_RESTART_BACKOFF_MS", 500) or 500)
         self._next_restart_ms: int = 0
 
     @staticmethod
@@ -219,29 +219,29 @@ class DaemonPolicy(BasePolicy):
             except Exception:
                 items.append(f"{p}:")
         h = hashlib.sha256()
-        h.update(("\n".join(items)).encode("utf-8"))
+        h.update(("\\n".join(items)).encode("utf-8"))
         return h.hexdigest()
 
     def _reload_tls(self) -> None:
         if not self._runner.is_alive():
             return
 
-        # 1) signal (preferred)
-        if self._reload_signal is not None:
-            try:
-                self._runner.send_signal(int(self._reload_signal))
-                self._log.event(
-                    EventCodeEnum.TLS_RELOAD,
-                    fields={"svc": self._cfg.service_name, "action": "signal", "sig": int(self._reload_signal)},
-                )
-                return
-            except Exception:
-                pass
+        # TERM-1: только hot-reload, рестарт запрещён.
+        if self._reload_signal is None:
+            self._log.event(
+                EventCodeEnum.TLS_RELOAD,
+                fields={"svc": self._cfg.service_name, "action": "skip", "reason": "no_signal_configured"},
+            )
+            return
 
-        # 2) restart process (fallback)
         try:
-            cmd = self._cmd_https if (self._current_mode or DaemonMode.HTTPS) == DaemonMode.HTTPS else (self._cmd_http or self._cmd_https)
-            self._runner.restart(spec=DaemonSpec(cmd=cmd), stop_timeout_ms=5000)
-            self._log.event(EventCodeEnum.TLS_RELOAD, fields={"svc": self._cfg.service_name, "action": "restart"})
+            self._runner.send_signal(int(self._reload_signal))
+            self._log.event(
+                EventCodeEnum.TLS_RELOAD,
+                fields={"svc": self._cfg.service_name, "action": "signal", "sig": int(self._reload_signal)},
+            )
         except Exception:
-            pass
+            self._log.event(
+                EventCodeEnum.TLS_RELOAD,
+                fields={"svc": self._cfg.service_name, "action": "skip", "reason": "signal_failed"},
+            )

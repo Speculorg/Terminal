@@ -2,34 +2,18 @@ from __future__ import annotations
 
 import time
 from pathlib import Path
-from typing import Any, Mapping, Optional, Sequence
+from typing import Any, Optional, Sequence
 
 from core._entities import HealthSnapshotType, StateEnum
 from core._interfaces import IDeps, IDepsFactory, IFSM, IRunProfile, IService
 
 
 class BaseService(IService):
-    """
-    Тонкий каркас сервиса.
-
-    Цель:
-    - Тонкий сервис предоставляет только RunProfile (stage_gates + start_cmd + bootstrap hooks).
-    - Вся сборка Deps и FSM по умолчанию происходит в ядре.
-
-    Инварианты:
-    - __init__ ничего не запускает
-    - run() можно вызвать только один раз (entrypoint)
-    - IDeps.close() вызывается гарантированно в finally
-    - FSM создаётся отдельно и не входит в Deps
-    """
-
     def __init__(self, *, run_profile: IRunProfile, deps_factory: Optional[IDepsFactory] = None) -> None:
         self._run_profile = run_profile
 
         if deps_factory is None:
-            # lazy import: избегаем циклов
             from core.deps import DepsFactory  # noqa: WPS433
-
             deps_factory = DepsFactory()
 
         self._deps_factory = deps_factory
@@ -44,21 +28,7 @@ class BaseService(IService):
     def _now_ms() -> int:
         return int(time.time() * 1000)
 
-    # --- hooks for concrete services (override only if really needed) ---
-
     def build_fsm(self, *, deps: IDeps) -> IFSM:
-        """
-        Создаёт FSM (TERM-1).
-
-        Источники:
-        - self._run_profile.stage_gates: Mapping[str, Sequence[str]]
-        - self._run_profile.start_cmd: Mapping[str, Sequence[str] | str | Any]
-
-        Примечания:
-        - stage_gates проверяются MarkerPolicy (не самим FSM)
-        - INITIALIZING не запускает демон: только вычисляет RunMode в MarkerPolicy
-        - start_cmd['https'] обязателен, start_cmd['http'] опционален
-        """
         from core.fsm import FSM
         from core.fsm.daemon import DaemonRunner
         from core.fsm.policies import (
@@ -73,7 +43,6 @@ class BaseService(IService):
         stage_gates_raw = getattr(self._run_profile, "stage_gates", {}) or {}
         start_cmd_raw = getattr(self._run_profile, "start_cmd", {}) or {}
 
-        # --- normalize stage_gates (str -> StateEnum) ---
         stage_gates: dict[StateEnum, tuple[str, ...]] = {}
         for k, v in dict(stage_gates_raw).items():
             try:
@@ -82,14 +51,12 @@ class BaseService(IService):
                 continue
             stage_gates[st] = tuple(v or ())
 
-        # --- normalize start_cmd (argv only for TERM-1) ---
         def _norm_cmd(x: Any) -> list[str]:
             if x is None:
                 return []
             if isinstance(x, (list, tuple)):
                 return [str(i) for i in x]
             if isinstance(x, str):
-                # shell-form не поддерживаем на TERM-1 (детерминизм)
                 return [x]
             return [str(x)]
 
@@ -101,31 +68,27 @@ class BaseService(IService):
 
         svc_name = str(getattr(deps.cfg, "service_name", "unknown"))
 
-        # --- RunMode shared ref (MarkerPolicy -> DaemonPolicy) ---
         run_mode_ref: dict[str, object] = {}
-
         marker_policy = MarkerPolicy(markers=deps.markers, stage_gates=stage_gates, run_mode_ref=run_mode_ref)
 
-        # --- TLS paths (used by TlsPolicy and TLS auto-reload in DaemonPolicy) ---
         enable_tls = bool(getattr(self._run_profile, "enable_tls", True))
         tls_bundle: list[Path] = []
         tls_policy: Optional[TlsPolicy] = None
 
         if enable_tls:
-            certs_dir = Path(
-                str(getattr(deps.cfg, "fs_certs_dir", deps.cfg.get("FS_CERTS_DIR", "/fs/terminal/certs")))
-            )
+            certs_dir = Path(str(deps.cfg.get("FS_CERTS_DIR", "/fs/terminal/certs")))
             ca_file = certs_dir / "ca.crt"
             cert_file = certs_dir / f"{svc_name}.crt"
             key_file = certs_dir / f"{svc_name}.key"
 
             tls_bundle = [ca_file, cert_file, key_file]
             tls_policy = TlsPolicy(
+                cfg=deps.cfg,
+                log=deps.log,
                 tls=deps.tls,
                 ca_file=ca_file,
                 cert_file=cert_file,
                 key_file=key_file,
-                bundle=None,
             )
 
         runner = DaemonRunner()
@@ -139,7 +102,6 @@ class BaseService(IService):
             tls_bundle=tls_bundle if enable_tls else None,
         )
 
-        # --- bootstrap hooks ---
         bootstrap_fn = getattr(self._run_profile, "bootstrap_fn", None)
         bootstrap_done = tuple(getattr(self._run_profile, "bootstrap_done_markers", ()) or ())
 
@@ -151,7 +113,6 @@ class BaseService(IService):
                 bootstrap_fn=lambda: bootstrap_fn(cfg=deps.cfg, fs=deps.fs, markers=deps.markers, log=deps.log),
             )
 
-        # --- base policy matrix ---
         boot_policies: list[Any] = [marker_policy, daemon_policy]
         if bootstrap_policy is not None:
             boot_policies.append(bootstrap_policy)
@@ -161,16 +122,21 @@ class BaseService(IService):
             securing_policies.append(tls_policy)
         securing_policies.append(daemon_policy)
 
+        # RUNNING: добавляем tls_policy (если TLS включён), чтобы ротация была всегда активна.
+        running_policies: list[Any] = []
+        if tls_policy is not None:
+            running_policies.append(tls_policy)
+        running_policies.append(daemon_policy)
+
         policy_matrix: dict[StateEnum, Sequence[Any]] = {
             StateEnum.INITIALIZING: (marker_policy,),
             StateEnum.BOOTSTRAPPING: tuple(boot_policies),
             StateEnum.SECURING: tuple(securing_policies),
             StateEnum.REGISTERING: (marker_policy,),
-            StateEnum.RUNNING: (daemon_policy,),
+            StateEnum.RUNNING: tuple(running_policies),
             StateEnum.STOPPING: (daemon_policy,),
         }
 
-        # --- Consul Registrar (TTL) ---
         if getattr(deps, "registrar", None) is not None:
             tags: tuple[str, ...] = ()
             try:
@@ -180,7 +146,6 @@ class BaseService(IService):
             except Exception:
                 tags = ()
 
-            # address/port: generic (ядро не знает конкретные сервисы)
             address = str(deps.cfg.get("SERVICE_ADVERTISE_HOST", svc_name))
             try:
                 port = int(deps.cfg.get("SERVICE_ADVERTISE_PORT", deps.cfg.get("SERVICE_PORT", 0)) or 0)
@@ -205,7 +170,13 @@ class BaseService(IService):
             )
 
             policy_matrix[StateEnum.REGISTERING] = (marker_policy, registrar_policy)
-            policy_matrix[StateEnum.RUNNING] = (registrar_policy, daemon_policy)
+
+            running2: list[Any] = []
+            if tls_policy is not None:
+                running2.append(tls_policy)
+            running2.append(registrar_policy)
+            running2.append(daemon_policy)
+            policy_matrix[StateEnum.RUNNING] = tuple(running2)
 
         return FSM(
             cfg=deps.cfg,
@@ -215,8 +186,6 @@ class BaseService(IService):
             policy_matrix=policy_matrix,  # type: ignore[arg-type]
         )
 
-    # --- IService ---
-
     def run(self) -> None:
         if self._started:
             raise RuntimeError("service.run() must be called only once")
@@ -225,8 +194,6 @@ class BaseService(IService):
         deps = self._deps_factory.build()
         self._deps = deps
 
-        # Volatile readiness markers: на каждом запуске очищаем "<service>_ready",
-        # чтобы stage_gates могли корректно "ждать готовности" на повторных стартах.
         try:
             svc_name = str(getattr(deps.cfg, "service_name", "unknown"))
             deps.markers.delete(f"{svc_name}_ready")
@@ -267,16 +234,3 @@ class BaseService(IService):
         if self._fsm is None:
             return
         self._fsm.resume()
-
-    def restart(self) -> None:
-        if self._fsm is None:
-            return
-        self._fsm.restart()
-
-    def stop(self) -> None:
-        if self._fsm is None:
-            return
-        self._fsm.stop()
-
-    def get_snapshot(self) -> HealthSnapshotType:
-        return self._snapshot
