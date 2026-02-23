@@ -1,7 +1,17 @@
-# Terminal
+# Speculorg.Terminal
 
-**Speculorg.Terminal** is an educational open-source experiment to build a multi-exchange trading terminal.
+Speculorg.Terminal is an open-source trading terminal for algorithmic trading and market analysis.
 
-⏳ Planned features include real-time data, multi-market connectivity, analytics, and strategy development.
+---
 
-💬 Community contributions are welcome — this is a shared journey toward understanding markets and building next-generation tools.
+Planned:
+- Support for multiple exchanges
+- More market data sources
+- AI tools integration
+
+---
+
+Resources:
+- https://specul.org/
+- https://t.me/speculorg
+- https://t.me/speculorg_chat
